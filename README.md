@@ -2,6 +2,10 @@
 
 Стартовый репозиторий для тестового задания Analytics Engineer в Highcore.
 
+## Задание
+
+Детали в [TEST_ASSIGNMENT.md](TEST_ASSIGNMENT.md).
+
 ## Требования
 
 - Python 3.11+
@@ -89,6 +93,3 @@ make docs
 └── skills/                   # для скиллов
 ```
 
-## Задание
-
-Детали в [TEST_ASSIGNMENT.md](TEST_ASSIGNMENT.md).

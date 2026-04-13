@@ -1,0 +1,21 @@
+name: 'highcore_ae_test'
+version: '1.0.0'
+
+profile: 'highcore_ae_test'
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  highcore_ae_test:
+    staging:
+      +materialized: view
+    intermediate:
+      +materialized: view
+    marts:
+      +materialized: table

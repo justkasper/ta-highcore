@@ -1,0 +1,11 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    tables:
+      - name: events
+        description: >
+          Raw Firebase Analytics events from a mobile F2P game (Flood It!).
+          Contains nested fields: event_params, user_properties, device, geo.
+          Period: 2018-06-12 to 2018-10-03.

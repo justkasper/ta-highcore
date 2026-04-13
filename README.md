@@ -13,8 +13,8 @@
 1. Клонируй репозиторий:
 
 ```bash
-git clone https://github.com/gerasuchkov/highcore-ae-test.git
-cd highcore-ae-test
+git clone https://github.com/gerasuchkov/highcore-ae-test-task.git
+cd highcore-ae-test-task
 ```
 
 2. Создай и активируй виртуальное окружение (Python 3.11+):

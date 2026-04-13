@@ -35,8 +35,8 @@
 Чтобы ты не тратил время на инфраструктуру, мы подготовили стартовый репозиторий с необходимым сетапом:
 
 ```
-git clone https://github.com/gerasuchkov/highcore-ae-test
-cd highcore-ae-test
+git clone https://github.com/gerasuchkov/highcore-ae-test-task
+cd highcore-ae-test-task
 make setup     # устанавливает зависимости и готовит данные
 make build     # прогоняет dbt build
 make docs      # поднимает dbt docs локально

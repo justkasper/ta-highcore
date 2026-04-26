@@ -64,6 +64,86 @@ unit_tests:
         - {cohort_date: '2018-06-12', day_number: 1, cohort_size: 10, gross_revenue: 0,    paying_users: 0, cum_revenue: 0.99, cum_paying_users: 1, cum_arpu: 0.099, cum_arppu: 0.99,  paying_share: 0.1}
         - {cohort_date: '2018-06-12', day_number: 2, cohort_size: 10, gross_revenue: 1.50, paying_users: 1, cum_revenue: 2.49, cum_paying_users: 2, cum_arpu: 0.249, cum_arppu: 1.245, paying_share: 0.2}
 
+  - name: mart_retention_overall_trailing_avg_null_on_first_cohort
+    description: >
+      Earliest cohort on the cohort_date axis has no preceding history,
+      so retention_pct_trailing_4w_avg is NULL by window construction —
+      the frame `rows between 28 preceding and 1 preceding` excludes the
+      current row, so an empty preceding set yields NULL (not 0). The
+      dashboard renders this NULL as "no baseline yet".
+    model: mart_retention_overall
+    given:
+      - input: ref('dim_users')
+        rows:
+          - {user_pseudo_id: 'U1', cohort_date: '2018-06-12'}
+      - input: ref('fct_user_daily')
+        rows:
+          - {user_pseudo_id: 'U1', cohort_date: '2018-06-12', activity_date: '2018-06-19', day_number: 7}
+      - input: ref('day_numbers')
+        rows:
+          - {day_number: 7}
+    expect:
+      rows:
+        - {cohort_date: '2018-06-12', day_number: 7, retention_pct: 1.0, retention_pct_trailing_4w_avg: null}
+
+  - name: mart_retention_overall_trailing_avg_partial_window_accumulates
+    description: >
+      Four daily cohorts at D7 with retentions {1.0, 1.0, 0.0, 0.0}.
+      The window grows: NULL → avg(1.0) → avg(1.0, 1.0) → avg(1.0, 1.0, 0.0).
+      Pins the rows-frame semantic — covers cases (1) NULL on first cohort
+      and (2) partial-window accumulation. Window saturation at 28 rows
+      is a built-in SQL frame contract; no separate fixture needed.
+    model: mart_retention_overall
+    given:
+      - input: ref('dim_users')
+        rows:
+          - {user_pseudo_id: 'U1', cohort_date: '2018-06-12'}
+          - {user_pseudo_id: 'U2', cohort_date: '2018-06-13'}
+          - {user_pseudo_id: 'U3', cohort_date: '2018-06-14'}
+          - {user_pseudo_id: 'U4', cohort_date: '2018-06-15'}
+      - input: ref('fct_user_daily')
+        rows:
+          - {user_pseudo_id: 'U1', cohort_date: '2018-06-12', activity_date: '2018-06-19', day_number: 7}
+          - {user_pseudo_id: 'U2', cohort_date: '2018-06-13', activity_date: '2018-06-20', day_number: 7}
+      - input: ref('day_numbers')
+        rows:
+          - {day_number: 7}
+    expect:
+      rows:
+        - {cohort_date: '2018-06-12', day_number: 7, retention_pct: 1.0, retention_pct_trailing_4w_avg: null}
+        - {cohort_date: '2018-06-13', day_number: 7, retention_pct: 1.0, retention_pct_trailing_4w_avg: 1.0}
+        - {cohort_date: '2018-06-14', day_number: 7, retention_pct: 0.0, retention_pct_trailing_4w_avg: 1.0}
+        - {cohort_date: '2018-06-15', day_number: 7, retention_pct: 0.0, retention_pct_trailing_4w_avg: 0.6667}
+
+  - name: mart_retention_by_platform_trailing_avg_independent_per_platform
+    description: >
+      `install_platform` enters the partition, so each platform's
+      trailing baseline is computed independently — iOS history does
+      not leak into Android baselines and vice versa. Two cohorts ×
+      two platforms with mirrored retention {1.0, 0.0} vs {0.0, 1.0}
+      pin this isolation.
+    model: mart_retention_by_platform
+    given:
+      - input: ref('dim_users')
+        rows:
+          - {user_pseudo_id: 'I1', cohort_date: '2018-06-12', install_platform: 'IOS'}
+          - {user_pseudo_id: 'I2', cohort_date: '2018-06-13', install_platform: 'IOS'}
+          - {user_pseudo_id: 'A1', cohort_date: '2018-06-12', install_platform: 'ANDROID'}
+          - {user_pseudo_id: 'A2', cohort_date: '2018-06-13', install_platform: 'ANDROID'}
+      - input: ref('fct_user_daily')
+        rows:
+          - {user_pseudo_id: 'I1', cohort_date: '2018-06-12', activity_date: '2018-06-19', day_number: 7}
+          - {user_pseudo_id: 'A2', cohort_date: '2018-06-13', activity_date: '2018-06-20', day_number: 7}
+      - input: ref('day_numbers')
+        rows:
+          - {day_number: 7}
+    expect:
+      rows:
+        - {cohort_date: '2018-06-12', install_platform: 'IOS',     day_number: 7, retention_pct: 1.0, retention_pct_trailing_4w_avg: null}
+        - {cohort_date: '2018-06-13', install_platform: 'IOS',     day_number: 7, retention_pct: 0.0, retention_pct_trailing_4w_avg: 1.0}
+        - {cohort_date: '2018-06-12', install_platform: 'ANDROID', day_number: 7, retention_pct: 0.0, retention_pct_trailing_4w_avg: null}
+        - {cohort_date: '2018-06-13', install_platform: 'ANDROID', day_number: 7, retention_pct: 1.0, retention_pct_trailing_4w_avg: 0.0}
+
   - name: mart_revenue_overall_same_user_paying_twice_inflates_cum_paying
     description: >
       Same user paying on D0 and D2 contributes to cum_paying_users on

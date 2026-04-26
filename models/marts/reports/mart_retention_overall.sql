@@ -40,15 +40,26 @@ retained as (
     from {{ ref('fct_user_daily') }}
     where day_number between 0 and 30
     group by 1, 2
+),
+
+joined as (
+    select
+        g.cohort_date,
+        g.day_number,
+        g.cohort_size,
+        coalesce(r.retained_users, 0) as retained_users,
+        coalesce(r.retained_users, 0)::numeric(18, 6) / g.cohort_size as retention_pct
+    from grid g
+    left join retained r
+        on r.cohort_date = g.cohort_date
+       and r.day_number  = g.day_number
 )
 
 select
-    g.cohort_date,
-    g.day_number,
-    g.cohort_size,
-    coalesce(r.retained_users, 0)                                              as retained_users,
-    coalesce(r.retained_users, 0)::numeric(18, 6) / g.cohort_size              as retention_pct
-from grid g
-left join retained r
-    on r.cohort_date = g.cohort_date
-   and r.day_number  = g.day_number
+    cohort_date,
+    day_number,
+    cohort_size,
+    retained_users,
+    retention_pct,
+    {{ retention_trailing_avg('day_number') }}::numeric(18, 4) as retention_pct_trailing_4w_avg
+from joined

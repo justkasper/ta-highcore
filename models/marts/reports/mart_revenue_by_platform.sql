@@ -1,12 +1,3 @@
-{#-
-    Cohort revenue with install_platform slice. Same shape as mart_revenue_overall
-    plus platform partition for window functions and group-by.
-
-    With ~$25 of revenue across 24 payers in the whole sample, slice numbers
-    are sparse — kept in scope to demonstrate the pattern (see
-    docs/architecture.md decision #4).
--#}
-
 with users as (
     select user_pseudo_id, cohort_date, install_platform from {{ ref('dim_users') }}
 ),
@@ -48,8 +39,8 @@ daily as (
         cohort_date,
         install_platform,
         day_number,
-        sum(gross_revenue)::numeric(18, 4)                                as gross_revenue,
-        count(distinct case when paying_flag then user_pseudo_id end)     as paying_users
+        sum(gross_revenue)::numeric(18, 4) as gross_revenue,
+        count(distinct case when paying_flag then user_pseudo_id end) as paying_users
     from fct
     group by 1, 2, 3
 ),
@@ -61,7 +52,7 @@ joined as (
         g.day_number,
         g.cohort_size,
         coalesce(d.gross_revenue, 0)::numeric(18, 4) as gross_revenue,
-        coalesce(d.paying_users, 0)                  as paying_users
+        coalesce(d.paying_users, 0) as paying_users
     from grid g
     left join daily d
         on d.cohort_date      = g.cohort_date
@@ -76,42 +67,5 @@ select
     cohort_size,
     gross_revenue,
     paying_users,
-    sum(gross_revenue) over (
-        partition by cohort_date, install_platform
-        order by day_number
-        rows between unbounded preceding and current row
-    )::numeric(18, 4)                                                  as cum_revenue,
-    sum(paying_users) over (
-        partition by cohort_date, install_platform
-        order by day_number
-        rows between unbounded preceding and current row
-    )                                                                  as cum_paying_users,
-    (sum(gross_revenue) over (
-        partition by cohort_date, install_platform
-        order by day_number
-        rows between unbounded preceding and current row
-    ) / cohort_size)::numeric(18, 6)                                   as cum_arpu,
-    case
-        when sum(paying_users) over (
-                partition by cohort_date, install_platform
-                order by day_number
-                rows between unbounded preceding and current row
-             ) = 0
-            then null
-        else sum(gross_revenue) over (
-                partition by cohort_date, install_platform
-                order by day_number
-                rows between unbounded preceding and current row
-             )::numeric(18, 6)
-             / sum(paying_users) over (
-                partition by cohort_date, install_platform
-                order by day_number
-                rows between unbounded preceding and current row
-             )
-    end                                                                as cum_arppu,
-    sum(paying_users) over (
-        partition by cohort_date, install_platform
-        order by day_number
-        rows between unbounded preceding and current row
-    )::numeric(18, 6) / cohort_size                                    as paying_share
+    {{ revenue_metrics_columns('cohort_date, install_platform') }}
 from joined

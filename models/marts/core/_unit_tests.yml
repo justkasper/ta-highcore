@@ -1,0 +1,81 @@
+version: 2
+
+# Unit tests for marts/core. Cover the SQL logic that data tests can't —
+# join + COALESCE + derived-field branches under controlled inputs.
+
+unit_tests:
+  - name: fct_user_daily_active_day_with_purchase
+    description: >
+      User active on a day with a purchase → row joins both inputs;
+      gross_revenue carries the value, paying_flag is true, day_number
+      computes correctly relative to cohort_date.
+    model: fct_user_daily
+    given:
+      - input: ref('dim_users')
+        rows:
+          - {user_pseudo_id: 'A', cohort_date: '2018-06-12'}
+      - input: ref('int_user_daily_activity')
+        rows:
+          - {user_pseudo_id: 'A', activity_date: '2018-06-19', events: 8, engagement_sec: 60, n_sessions_proxy: 1}
+      - input: ref('int_user_daily_revenue')
+        rows:
+          - {user_pseudo_id: 'A', activity_date: '2018-06-19', gross_revenue: 0.99, n_purchases: 1}
+    expect:
+      rows:
+        - {user_pseudo_id: 'A', cohort_date: '2018-06-12', activity_date: '2018-06-19', day_number: 7, events: 8, gross_revenue: 0.99, n_purchases: 1, paying_flag: true}
+
+  - name: fct_user_daily_active_day_without_purchase
+    description: >
+      User active on a day with no purchase → LEFT JOIN miss on revenue;
+      coalesce yields gross_revenue = 0, paying_flag = false, n_purchases = 0.
+    model: fct_user_daily
+    given:
+      - input: ref('dim_users')
+        rows:
+          - {user_pseudo_id: 'B', cohort_date: '2018-06-12'}
+      - input: ref('int_user_daily_activity')
+        rows:
+          - {user_pseudo_id: 'B', activity_date: '2018-06-15', events: 5, engagement_sec: 30, n_sessions_proxy: 1}
+      - input: ref('int_user_daily_revenue')
+        rows: []
+    expect:
+      rows:
+        - {user_pseudo_id: 'B', cohort_date: '2018-06-12', activity_date: '2018-06-15', day_number: 3, events: 5, gross_revenue: 0, n_purchases: 0, paying_flag: false}
+
+  - name: fct_user_daily_day_zero_at_cohort_date
+    description: >
+      User active on their cohort_date itself → day_number = 0. Boundary case
+      that the architecture relies on (D0 retention = 1.0 invariant).
+    model: fct_user_daily
+    given:
+      - input: ref('dim_users')
+        rows:
+          - {user_pseudo_id: 'C', cohort_date: '2018-08-01'}
+      - input: ref('int_user_daily_activity')
+        rows:
+          - {user_pseudo_id: 'C', activity_date: '2018-08-01', events: 1, engagement_sec: 5, n_sessions_proxy: 0}
+      - input: ref('int_user_daily_revenue')
+        rows: []
+    expect:
+      rows:
+        - {user_pseudo_id: 'C', cohort_date: '2018-08-01', activity_date: '2018-08-01', day_number: 0, events: 1, gross_revenue: 0, n_purchases: 0, paying_flag: false}
+
+  - name: dim_users_p99_outlier_boundary
+    description: >
+      `is_outlier_events` is `events_total > percentile_cont(0.99)` (strict
+      inequality). With 4 users at events_total = {1, 5, 10, 100}, p99 ≈ 97.3
+      — only the user with 100 events is flagged as outlier.
+    model: dim_users
+    given:
+      - input: ref('int_user_install')
+        rows:
+          - {user_pseudo_id: 'U1', cohort_date: '2018-06-12', install_platform: 'IOS',     install_country: 'United States', install_country_top5: 'United States', install_traffic_medium: '(none)', install_app_id: 'com.google.flood2',  first_event_name: 'first_open', is_reinstall: false, events_total: 1}
+          - {user_pseudo_id: 'U2', cohort_date: '2018-06-13', install_platform: 'IOS',     install_country: 'United States', install_country_top5: 'United States', install_traffic_medium: '(none)', install_app_id: 'com.google.flood2',  first_event_name: 'first_open', is_reinstall: false, events_total: 5}
+          - {user_pseudo_id: 'U3', cohort_date: '2018-06-14', install_platform: 'ANDROID', install_country: 'India',         install_country_top5: 'India',         install_traffic_medium: '(none)', install_app_id: 'com.labpixies.flood', first_event_name: 'first_open', is_reinstall: false, events_total: 10}
+          - {user_pseudo_id: 'U4', cohort_date: '2018-06-15', install_platform: 'ANDROID', install_country: 'India',         install_country_top5: 'India',         install_traffic_medium: '(none)', install_app_id: 'com.labpixies.flood', first_event_name: 'first_open', is_reinstall: false, events_total: 100}
+    expect:
+      rows:
+        - {user_pseudo_id: 'U1', is_outlier_events: false}
+        - {user_pseudo_id: 'U2', is_outlier_events: false}
+        - {user_pseudo_id: 'U3', is_outlier_events: false}
+        - {user_pseudo_id: 'U4', is_outlier_events: true}

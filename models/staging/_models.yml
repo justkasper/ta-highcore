@@ -1,0 +1,98 @@
+version: 2
+
+models:
+  - name: stg_events
+    description: >
+      Typed and normalized 1:1 view over `raw.events`. No aggregation, no
+      business filters. Three jobs:
+      (1) cast `event_timestamp` (microseconds) to UTC `TIMESTAMP` and `DATE`;
+      (2) deduplicate on `(user_pseudo_id, event_timestamp, event_name)` —
+          source has 207 bit-identical duplicates (~0.004%);
+      (3) flatten the keys we actually use from `event_params` and the
+          `device` / `geo` / `app_info` / `traffic_source` structs into
+          top-level columns.
+
+      Heavy nested fields and provably useless columns are dropped:
+      `user_id` (100% NULL), `event_dimensions` (100% NULL), `stream_id`
+      (1:1 with `platform`), `user_first_touch_timestamp` (disagrees with
+      first observed event for 97% of users — see docs/data_exploration.md).
+
+      For BigQuery production, this view becomes
+      `materialized=incremental, partition_by=event_date_utc,
+      unique_key=(user_pseudo_id, event_timestamp, event_name),
+      incremental_strategy='merge'` — SQL stays the same, only configs change.
+
+    columns:
+      - name: user_pseudo_id
+        description: Stable, 100%-coverage user identifier. Primary key for `dim_users`.
+        data_tests:
+          - not_null
+      - name: event_timestamp
+        description: Microseconds since epoch (BIGINT). Part of the dedup key.
+        data_tests:
+          - not_null
+      - name: event_ts_utc
+        description: Typed UTC `TIMESTAMP` derived from `event_timestamp`.
+        data_tests:
+          - not_null
+      - name: event_date_utc
+        description: >
+          UTC date of the event. Project-wide time anchor — disagrees with the
+          source's local-TZ `event_date` on 34% of rows. We standardize on UTC.
+        data_tests:
+          - not_null
+      - name: event_date
+        description: Raw local-TZ `event_date` (string `YYYYMMDD`). Kept only for source reconciliation.
+      - name: event_name
+        description: Firebase event name (37 distinct values in the sample).
+        data_tests:
+          - not_null
+      - name: platform
+        description: Client platform. Two product builds in the sample.
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ["ANDROID", "IOS"]
+      - name: event_value_in_usd
+        description: >
+          USD value of the purchase. NULL for non-monetized events; > 0 only on
+          `event_name = 'in_app_purchase'`. Cohort-revenue source (we deliberately
+          don't use `user_ltv` for cohort attribution).
+      - name: event_previous_timestamp
+        description: Microseconds — timestamp of the previous event for this user. Not consumed downstream; kept for ad-hoc QA.
+      - name: event_bundle_sequence_id
+        description: Sequence ID of the event bundle. Used as a deterministic dedup tiebreaker.
+      - name: event_server_timestamp_offset
+        description: Server-side TZ offset. Used as a deterministic dedup tiebreaker.
+      - name: engagement_time_msec
+        description: Foreground engagement duration in ms. Extracted from `event_params`. Summed per day in intermediate.
+      - name: screen_class
+        description: '`event_params.firebase_screen_class` — the screen on which the event was emitted. Available for future slices.'
+      - name: previous_first_open_count
+        description: '`event_params.previous_first_open_count` — populated only on `first_open`. > 0 = reinstall; feeds `is_reinstall` in `dim_users`.'
+      - name: ga_session_id
+        description: '`event_params.ga_session_id`. Always NULL in this sample; kept for parity with the live stream contract.'
+      - name: device_category
+        description: '`device.category` (`mobile` / `tablet`).'
+      - name: device_os
+        description: '`device.operating_system` with the literal `"NaN"` string normalized to NULL.'
+      - name: country
+        description: '`geo.country`. US dominates (~54% of users).'
+      - name: app_id
+        description: '`app_info.id` — bundle id (`com.labpixies.flood` Android / `com.google.flood2` iOS). 1:1 with `platform`.'
+      - name: traffic_medium
+        description: '`traffic_source.medium`. ~75% `(none)`, < 1% paid.'
+      - name: traffic_source_name
+        description: '`traffic_source.name` — install campaign / source.'
+
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - user_pseudo_id
+            - event_timestamp
+            - event_name
+      - dbt_utils.expression_is_true:
+          expression: "event_value_in_usd is null or (event_value_in_usd > 0 and event_name = 'in_app_purchase')"
+          config:
+            error_if: ">0"
+            warn_if: ">0"

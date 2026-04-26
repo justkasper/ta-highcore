@@ -1,10 +1,11 @@
 {#-
     Date-spine for densification of (cohort_date × day_number) in reports/.
-    D0..D30 inclusive (31 rows).
+    D0..D{var('max_day_number')} inclusive (default 31 rows).
 
-    The D30 window is a product decision. Changing the window means editing 
-    this single view rather than every report. To extend to D60 or D90, 
-    raise the upper bound here.
+    The D-window is a product decision. To extend to D60/D90, raise
+    `vars.max_day_number` in `dbt_project.yml` — single source of truth
+    that drives both this view AND the `where day_number between 0 and
+    var(...)` filters in every report mart.
 -#}
 
-select unnest(generate_series(0, 30)) as day_number
+select unnest(generate_series(0, {{ var('max_day_number') }})) as day_number

@@ -2,86 +2,148 @@ version: 2
 
 models:
   - name: int_user_install
-    description: >
-      User-grain install attributes. One row per `user_pseudo_id` — the basis
-      for `dim_users`. cohort_date = first observed event_date_utc.
-      `install_*` columns are pulled from the row of the user's first event.
-      `is_reinstall` is bool_or per user (NULL-safe). Top-5 `install_country`
-      is computed dynamically from the data; the rest collapse to 'Other'.
+    description: |
+      ROLE: User-grain install attributes — the basis for `dim_users`.
+      USE WHEN: Building or extending `dim_users`. Direct downstream refs are
+      discouraged; reach for `dim_users` instead.
+      DON'T USE FOR: Daily metrics (use `int_user_daily_activity` /
+      `int_user_daily_revenue` or `fct_user_daily`); event-level questions (use
+      `stg_events`).
 
-      Tests trimmed to `not_null` on PK columns for fast-fail localization;
-      uniqueness and accepted_values are covered downstream by `dim_users`
-      (single source of truth for user dimension).
+      GRAIN: One row per `user_pseudo_id`.
+      PK: user_pseudo_id
+      FK: none (sourced from `stg_events` directly).
+      DOWNSTREAM: dim_users (only direct consumer).
+
+      EDGE CASES:
+        - `cohort_date = min(event_date_utc) per user` — NOT `user_first_touch_timestamp` (97% mismatch in the sample) and NOT the `first_open` event (only 28% of users have one).
+        - `install_*` columns are pulled from the user's first event. Tie-break on equal `event_ts_utc`: alphabetical `event_name`, then `event_bundle_sequence_id NULLS LAST`, then `event_server_timestamp_offset NULLS LAST` — deterministic across re-runs and against the rare case where two events share `(timestamp, event_name)` (would happen only if upstream `stg_events` dedup ever regresses).
+        - `is_reinstall` uses NULL-safe `bool_or(previous_first_open_count > 0)` then `coalesce(..., false)` — never NULL on output. ~1% of users true; the rest are `false` (either explicit false or "no first_open event observed"). NULL-safe semantics are exercised in the unit tests, but the column itself is BOOL NOT NULL.
+        - Tests trimmed to `not_null` on PK columns for fast-fail localization; uniqueness and accepted_values are covered downstream by `dim_users` (single source of truth for user dimension).
+    meta:
+      owner: analytics-eng
     columns:
       - name: user_pseudo_id
-        description: Primary key.
+        description: Primary key. Stable Firebase pseudonymous user identifier.
         data_tests:
           - not_null
+          - unique
       - name: cohort_date
-        description: '`min(event_date_utc) per user`. First day this user is observed in the sample window.'
+        description: |
+          UTC date of the user's first observed event in the sample (`min(event_date_utc) per user`).
+          Cohort anchor for retention and revenue reports.
         data_tests:
           - not_null
       - name: install_platform
-        description: ANDROID/IOS at the time of the user's first event.
+        description: 'ANDROID / IOS at the time of the user''s first event. Allowed values: `ANDROID`, `IOS`.'
       - name: install_country
-        description: '`geo.country` at the time of the user''s first event.'
-      - name: install_country_top5
-        description: 'Top-5 countries by user count (US, IN, JP, CA, GB) plus `Other` for the rest.'
+        description: '`geo.country` (full country name string, e.g. `United States`) at the time of the user''s first event.'
       - name: install_traffic_medium
-        description: '`traffic_source.medium` at the time of the user''s first event (~75% `(none)`).'
+        description: '`traffic_source.medium` at the time of the user''s first event. ~75% `(none)` in the sample.'
       - name: install_app_id
-        description: '`app_info.id` — bundle id (`com.labpixies.flood` / `com.google.flood2`).'
+        description: '`app_info.id` — bundle id (`com.labpixies.flood` Android / `com.google.flood2` iOS). 1:1 with `install_platform`.'
       - name: first_event_name
-        description: Name of the user's first event. Tiebreak is alphabetical when multiple events share the same microsecond.
+        description: |
+          Entry-funnel signal — what kind of event the user's first session was opened by.
+          `first_open` is the canonical "fresh install"; `screen_view` indicates re-entry without a fresh `first_open` event; other names indicate the user landed mid-session for some upstream reason. Currently NOT consumed by any mart — held for ad-hoc analytics / future entry-funnel buckets in `mart_*_by_first_event`. Tie-break across events with equal `event_ts_utc`: alphabetical by `event_name`, then `event_bundle_sequence_id NULLS LAST`, then `event_server_timestamp_offset NULLS LAST`.
       - name: is_reinstall
-        description: '`bool_or(previous_first_open_count > 0)` per user. ~1% of users.'
+        description: |
+          `coalesce(bool_or(previous_first_open_count > 0), false)` per user. BOOL NOT NULL.
+          ~1% of users true; the rest are `false`.
       - name: events_total
-        description: Total event count for the user across the sample. Source for `is_outlier_events` in `dim_users`.
-        data_tests:
-          - dbt_utils.expression_is_true:
-              expression: "> 0"
+        description: Total event count for the user across the sample. Source for `is_outlier_events` in `dim_users` (`events_total > p99`, p99 ≈ 5,541 in the sample). NOT directly tested — `events_total = count(*) per user` after `min(event_date_utc) per user` is `>= 1` by construction; a regression that broke this would already manifest as `unique` failures on `dim_users.user_pseudo_id`.
 
   - name: int_user_daily_activity
-    description: >
-      User × activity_date (sparse). One row per (user_pseudo_id, event_date_utc),
-      only days with >= 1 event. Metrics: events, engagement_sec, n_sessions_proxy.
-      Left-join source for `fct_user_daily`.
+    description: |
+      ROLE: User × activity_date facts (sparse). Activity-side input to the
+      `fct_user_daily` LEFT-JOIN.
+      USE WHEN: Building `fct_user_daily` or any model that needs per-user-day
+      engagement / event counts for days the user was active.
+      DON'T USE FOR: Revenue questions (use `int_user_daily_revenue`); user-grain
+      attributes (use `int_user_install`); densified retention grids (use
+      `mart_retention_*` — densification happens there, not here).
 
-      Tests trimmed to `not_null` on PK; uniqueness covered by
-      `fct_user_daily.unique_combination_of_columns(user_pseudo_id, activity_date)`.
+      GRAIN: One row per (user_pseudo_id, activity_date) — sparse; only days with ≥ 1 event.
+      PK: (user_pseudo_id, activity_date)
+      FK: user_pseudo_id → dim_users.user_pseudo_id (asserted on `fct_user_daily`).
+      DOWNSTREAM: fct_user_daily (only direct consumer; left-join source for the activity side).
+
+      EDGE CASES:
+        - Sparse: rows exist only on days the user generated ≥ 1 event. Days with no activity are NOT materialized — densification (cross join with `day_numbers`) happens in `marts/reports/*`.
+        - `n_sessions_proxy` is a proxy, not a true session count — the source's `ga_session_id` is 100% NULL in this sample, so we count `event_name = 'session_start'` events instead.
+        - `engagement_sec` is NULL-safe (coalesce); can be 0 on days where the user emitted events without engagement timers.
+        - Tests trimmed to `not_null` on PK columns; uniqueness covered downstream by `fct_user_daily.unique_combination_of_columns(user_pseudo_id, activity_date)`.
+    meta:
+      owner: analytics-eng
     columns:
       - name: user_pseudo_id
-        description: Foreign key → dim_users.
+        description: FK → `dim_users.user_pseudo_id`.
         data_tests:
           - not_null
+          - relationships:
+              to: ref('dim_users')
+              field: user_pseudo_id
+              config:
+                severity: warn
       - name: activity_date
-        description: UTC date of activity.
+        description: UTC date of activity (`event_date_utc` from `stg_events`).
         data_tests:
           - not_null
       - name: events
-        description: Number of events on this day. >= 1 by construction.
+        description: Number of events for this user on this day. >= 1 by sparse construction.
       - name: engagement_sec
-        description: 'sum(engagement_time_msec) / 1000 for the day. NULL-safe (coalesce). Can be 0 on days without engagement-bearing events.'
+        description: |
+          Engagement in seconds — `sum(engagement_time_msec) / 1000` for the day, NULL-safe (coalesce).
+          0 when the user emitted events without engagement timers; NEVER NULL on output.
+          NUMERIC(18,4); cast at this layer to avoid floating-point drift downstream.
       - name: n_sessions_proxy
-        description: 'count(event_name = ''session_start'') for the day. Proxy because `ga_session_id` is 100% NULL in the source.'
+        description: |
+          PROXY session count (`count(event_name = 'session_start')` for the day) — NOT a true session count.
+          Firebase `ga_session_id` is 100% NULL in this sample, so we approximate with the explicit
+          `session_start` event. Read with caution — `session_start` event is present for only ~81% of users.
 
   - name: int_user_daily_revenue
-    description: >
-      User × activity_date with at least one purchase (sparse). 27 events /
-      24 distinct payers / $24.89 across the sample. Source of revenue metrics
-      for `fct_user_daily`.
+    description: |
+      ROLE: User × activity_date revenue facts (sparse). Revenue-side input to
+      the `fct_user_daily` LEFT-JOIN.
+      USE WHEN: Building `fct_user_daily` or any model that needs per-user-day
+      revenue on purchase days.
+      DON'T USE FOR: Activity questions (use `int_user_daily_activity`); cohort
+      revenue rollups (use `mart_revenue_*`).
 
-      Tests trimmed to `not_null` on PK; uniqueness covered downstream.
+      GRAIN: One row per (user_pseudo_id, activity_date) — sparse; only days with ≥ 1 purchase.
+      PK: (user_pseudo_id, activity_date)
+      FK: user_pseudo_id → dim_users.user_pseudo_id (asserted on `fct_user_daily`).
+      DOWNSTREAM: fct_user_daily (only direct consumer; left-join source for the revenue side).
+
+      EDGE CASES:
+        - Sparse: rows exist only on days the user had ≥ 1 `in_app_purchase` event. Days without purchases are NOT materialized — non-payer days inherit `gross_revenue = 0` via the LEFT JOIN in `fct_user_daily`.
+        - Tiny in this sample: 27 events / 24 distinct payers / $24.89 total. Sparse statistics — read relatively, not as absolute KPIs.
+        - Filter is `event_name = 'in_app_purchase'` (NOT `event_value_in_usd > 0`); see `docs/assumptions.md` #10. Source-level events with NULL `event_value_in_usd` would be counted in `n_purchases` but skipped by `sum(gross_revenue)` (NULLs ignored by sum) — fact-table consequence is documented on `fct_user_daily`.
+        - Tests trimmed to `not_null` on PK columns; uniqueness covered downstream.
+    meta:
+      owner: analytics-eng
     columns:
       - name: user_pseudo_id
-        description: Foreign key → dim_users.
+        description: FK → `dim_users.user_pseudo_id`.
         data_tests:
           - not_null
+          - relationships:
+              to: ref('dim_users')
+              field: user_pseudo_id
+              config:
+                severity: warn
       - name: activity_date
-        description: UTC date of the purchase day.
+        description: UTC date of the purchase day (`event_date_utc` from `stg_events`).
         data_tests:
           - not_null
       - name: gross_revenue
-        description: 'sum(event_value_in_usd::numeric(18,4)) for the day. > 0 by construction (event_name filter).'
+        description: |
+          Gross revenue in USD for the day — `sum(event_value_in_usd)` over
+          `event_name = 'in_app_purchase'` events (`event_value_in_usd` is already NUMERIC(18,4)
+          at the staging layer). NULL-value events are silently skipped by `sum`.
+          NUMERIC(18,4); >= 0.
       - name: n_purchases
-        description: Number of `in_app_purchase` events on this day.
+        description: |
+          Number of `in_app_purchase` events on this day (`count(*)`, no value filter).
+          May exceed the count of monetized events if source has NULL-value purchases — see `fct_user_daily` edge cases.

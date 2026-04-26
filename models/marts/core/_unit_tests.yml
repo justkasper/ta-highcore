@@ -69,10 +69,10 @@ unit_tests:
     given:
       - input: ref('int_user_install')
         rows:
-          - {user_pseudo_id: 'U1', cohort_date: '2018-06-12', install_platform: 'IOS',     install_country: 'United States', install_country_top5: 'United States', install_traffic_medium: '(none)', install_app_id: 'com.google.flood2',  first_event_name: 'first_open', is_reinstall: false, events_total: 1}
-          - {user_pseudo_id: 'U2', cohort_date: '2018-06-13', install_platform: 'IOS',     install_country: 'United States', install_country_top5: 'United States', install_traffic_medium: '(none)', install_app_id: 'com.google.flood2',  first_event_name: 'first_open', is_reinstall: false, events_total: 5}
-          - {user_pseudo_id: 'U3', cohort_date: '2018-06-14', install_platform: 'ANDROID', install_country: 'India',         install_country_top5: 'India',         install_traffic_medium: '(none)', install_app_id: 'com.labpixies.flood', first_event_name: 'first_open', is_reinstall: false, events_total: 10}
-          - {user_pseudo_id: 'U4', cohort_date: '2018-06-15', install_platform: 'ANDROID', install_country: 'India',         install_country_top5: 'India',         install_traffic_medium: '(none)', install_app_id: 'com.labpixies.flood', first_event_name: 'first_open', is_reinstall: false, events_total: 100}
+          - {user_pseudo_id: 'U1', cohort_date: '2018-06-12', install_platform: 'IOS',     install_country: 'United States', install_traffic_medium: '(none)', install_app_id: 'com.google.flood2',  first_event_name: 'first_open', is_reinstall: false, events_total: 1}
+          - {user_pseudo_id: 'U2', cohort_date: '2018-06-13', install_platform: 'IOS',     install_country: 'United States', install_traffic_medium: '(none)', install_app_id: 'com.google.flood2',  first_event_name: 'first_open', is_reinstall: false, events_total: 5}
+          - {user_pseudo_id: 'U3', cohort_date: '2018-06-14', install_platform: 'ANDROID', install_country: 'India',         install_traffic_medium: '(none)', install_app_id: 'com.labpixies.flood', first_event_name: 'first_open', is_reinstall: false, events_total: 10}
+          - {user_pseudo_id: 'U4', cohort_date: '2018-06-15', install_platform: 'ANDROID', install_country: 'India',         install_traffic_medium: '(none)', install_app_id: 'com.labpixies.flood', first_event_name: 'first_open', is_reinstall: false, events_total: 100}
     expect:
       rows:
         - {user_pseudo_id: 'U1', is_outlier_events: false}

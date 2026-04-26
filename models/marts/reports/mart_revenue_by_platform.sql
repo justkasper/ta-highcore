@@ -31,7 +31,7 @@ fct as (
         f.paying_flag
     from {{ ref('fct_user_daily') }} f
     join users u using (user_pseudo_id)
-    where f.day_number between 0 and 30
+    where f.day_number between 0 and {{ var('max_day_number') }}
 ),
 
 daily as (

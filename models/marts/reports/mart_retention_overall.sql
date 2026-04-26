@@ -38,7 +38,7 @@ retained as (
         day_number,
         count(distinct user_pseudo_id) as retained_users
     from {{ ref('fct_user_daily') }}
-    where day_number between 0 and 30
+    where day_number between 0 and {{ var('max_day_number') }}
     group by 1, 2
 ),
 

@@ -18,7 +18,7 @@ stg_side as (
     from {{ ref('stg_events') }} s
     join {{ ref('dim_users') }} u using (user_pseudo_id)
     where s.event_name = 'in_app_purchase'
-      and (s.event_date_utc - u.cohort_date) between 0 and 30
+      and (s.event_date_utc - u.cohort_date) between 0 and {{ var('max_day_number') }}
 )
 
 select

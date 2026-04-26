@@ -22,7 +22,7 @@ daily as (
         sum(gross_revenue)::numeric(18, 4) as gross_revenue,
         count(distinct case when paying_flag then user_pseudo_id end) as paying_users
     from {{ ref('fct_user_daily') }}
-    where day_number between 0 and 30
+    where day_number between 0 and {{ var('max_day_number') }}
     group by 1, 2
 ),
 

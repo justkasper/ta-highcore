@@ -1,0 +1,90 @@
+version: 2
+
+models:
+  - name: int_user_install
+    description: >
+      User-grain install attributes. One row per `user_pseudo_id` — the basis
+      for `dim_users`. cohort_date = first observed event_date_utc.
+      `install_*` columns are pulled from the row of the user's first event.
+      `is_reinstall` is bool_or per user (NULL-safe). Top-5 `install_country`
+      is computed dynamically from the data; the rest collapse to 'Other'.
+    columns:
+      - name: user_pseudo_id
+        description: Primary key.
+        data_tests:
+          - not_null
+          - unique
+      - name: cohort_date
+        description: '`min(event_date_utc) per user`. First day this user is observed in the sample window.'
+        data_tests:
+          - not_null
+      - name: install_platform
+        description: ANDROID/IOS at the time of the user's first event.
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ["ANDROID", "IOS"]
+      - name: install_country
+        description: '`geo.country` at the time of the user''s first event.'
+      - name: install_country_top5
+        description: 'Top-5 countries by user count (US, IN, JP, CA, GB) plus `Other` for the rest.'
+      - name: install_traffic_medium
+        description: '`traffic_source.medium` at the time of the user''s first event (~75% `(none)`).'
+      - name: install_app_id
+        description: '`app_info.id` — bundle id (`com.labpixies.flood` / `com.google.flood2`).'
+      - name: first_event_name
+        description: Name of the user's first event. Tiebreak is alphabetical when multiple events share the same microsecond.
+      - name: is_reinstall
+        description: '`bool_or(previous_first_open_count > 0)` per user. ~1% of users.'
+      - name: events_total
+        description: Total event count for the user across the sample. Source for `is_outlier_events` in `dim_users`.
+
+  - name: int_user_daily_activity
+    description: >
+      User × activity_date (sparse). One row per (user_pseudo_id, event_date_utc),
+      only days with >= 1 event. Metrics: events, engagement_sec, n_sessions_proxy.
+      Left-join source for `fct_user_daily`.
+    columns:
+      - name: user_pseudo_id
+        description: Foreign key → dim_users.
+        data_tests:
+          - not_null
+      - name: activity_date
+        description: UTC date of activity.
+        data_tests:
+          - not_null
+      - name: events
+        description: Number of events on this day. >= 1 by construction.
+      - name: engagement_sec
+        description: 'sum(engagement_time_msec) / 1000 for the day. NULL-safe (coalesce). Can be 0 on days without engagement-bearing events.'
+      - name: n_sessions_proxy
+        description: 'count(event_name = ''session_start'') for the day. Proxy because `ga_session_id` is 100% NULL in the source.'
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - user_pseudo_id
+            - activity_date
+
+  - name: int_user_daily_revenue
+    description: >
+      User × activity_date with at least one purchase (sparse). 27 events /
+      24 distinct payers / $24.89 across the sample. Source of revenue metrics
+      for `fct_user_daily`.
+    columns:
+      - name: user_pseudo_id
+        description: Foreign key → dim_users.
+        data_tests:
+          - not_null
+      - name: activity_date
+        description: UTC date of the purchase day.
+        data_tests:
+          - not_null
+      - name: gross_revenue
+        description: 'sum(event_value_in_usd::numeric(18,4)) for the day. > 0 by construction (event_name filter).'
+      - name: n_purchases
+        description: Number of `in_app_purchase` events on this day.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - user_pseudo_id
+            - activity_date

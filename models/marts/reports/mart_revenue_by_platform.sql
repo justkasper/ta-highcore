@@ -58,14 +58,21 @@ joined as (
         on d.cohort_date      = g.cohort_date
        and d.install_platform = g.install_platform
        and d.day_number       = g.day_number
+),
+
+metrics as (
+    select
+        cohort_date,
+        install_platform,
+        day_number,
+        cohort_size,
+        gross_revenue,
+        paying_users,
+        {{ revenue_metrics_columns('cohort_date, install_platform') }}
+    from joined
 )
 
 select
-    cohort_date,
-    install_platform,
-    day_number,
-    cohort_size,
-    gross_revenue,
-    paying_users,
-    {{ revenue_metrics_columns('cohort_date, install_platform') }}
-from joined
+    metrics.*,
+    {{ trailing_avg('cum_arpu', 'day_number, install_platform') }}::numeric(18, 4) as cum_arpu_trailing_4w_avg
+from metrics

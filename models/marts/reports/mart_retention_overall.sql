@@ -61,5 +61,5 @@ select
     cohort_size,
     retained_users,
     retention_pct,
-    {{ retention_trailing_avg('day_number') }}::numeric(18, 4) as retention_pct_trailing_4w_avg
+    {{ trailing_avg('retention_pct', 'day_number') }}::numeric(18, 4) as retention_pct_trailing_4w_avg
 from joined

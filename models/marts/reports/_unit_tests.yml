@@ -144,6 +144,53 @@ unit_tests:
         - {cohort_date: '2018-06-12', install_platform: 'ANDROID', day_number: 7, retention_pct: 0.0, retention_pct_trailing_4w_avg: null}
         - {cohort_date: '2018-06-13', install_platform: 'ANDROID', day_number: 7, retention_pct: 1.0, retention_pct_trailing_4w_avg: 0.0}
 
+  - name: mart_revenue_overall_cum_arpu_trailing_avg_null_on_first_cohort
+    description: >
+      Earliest cohort on the cohort_date axis has no preceding history,
+      so cum_arpu_trailing_4w_avg is NULL by window construction —
+      same NULL-on-first-cohort semantic as the retention variant.
+    model: mart_revenue_overall
+    given:
+      - input: ref('dim_users')
+        rows:
+          - {user_pseudo_id: 'U1', cohort_date: '2018-06-12'}
+      - input: ref('fct_user_daily')
+        rows: []
+      - input: ref('day_numbers')
+        rows:
+          - {day_number: 0}
+    expect:
+      rows:
+        - {cohort_date: '2018-06-12', day_number: 0, cum_arpu: 0, cum_arpu_trailing_4w_avg: null}
+
+  - name: mart_revenue_overall_cum_arpu_trailing_avg_partial_window_accumulates
+    description: >
+      Four daily 1-user cohorts at D0 with cum_arpu {1.0, 2.0, 0.0, 0.0}.
+      Window grows: NULL → avg(1.0) → avg(1.0, 2.0) = 1.5 → avg(1.0, 2.0, 0.0) = 1.0.
+      Pins the rows-frame semantic for cum_arpu and confirms the
+      generalized `trailing_avg` macro works on revenue metrics.
+    model: mart_revenue_overall
+    given:
+      - input: ref('dim_users')
+        rows:
+          - {user_pseudo_id: 'U1', cohort_date: '2018-06-12'}
+          - {user_pseudo_id: 'U2', cohort_date: '2018-06-13'}
+          - {user_pseudo_id: 'U3', cohort_date: '2018-06-14'}
+          - {user_pseudo_id: 'U4', cohort_date: '2018-06-15'}
+      - input: ref('fct_user_daily')
+        rows:
+          - {user_pseudo_id: 'U1', cohort_date: '2018-06-12', activity_date: '2018-06-12', day_number: 0, gross_revenue: 1.00, paying_flag: true}
+          - {user_pseudo_id: 'U2', cohort_date: '2018-06-13', activity_date: '2018-06-13', day_number: 0, gross_revenue: 2.00, paying_flag: true}
+      - input: ref('day_numbers')
+        rows:
+          - {day_number: 0}
+    expect:
+      rows:
+        - {cohort_date: '2018-06-12', day_number: 0, cum_arpu: 1.0, cum_arpu_trailing_4w_avg: null}
+        - {cohort_date: '2018-06-13', day_number: 0, cum_arpu: 2.0, cum_arpu_trailing_4w_avg: 1.0}
+        - {cohort_date: '2018-06-14', day_number: 0, cum_arpu: 0.0, cum_arpu_trailing_4w_avg: 1.5}
+        - {cohort_date: '2018-06-15', day_number: 0, cum_arpu: 0.0, cum_arpu_trailing_4w_avg: 1.0}
+
   - name: mart_revenue_overall_same_user_paying_twice_inflates_cum_paying
     description: >
       Same user paying on D0 and D2 contributes to cum_paying_users on

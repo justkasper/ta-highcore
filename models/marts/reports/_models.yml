@@ -1,12 +1,23 @@
 version: 2
 
+# Test philosophy for this layer:
+# Reports are derived aggregates over `fct_user_daily` and `dim_users`.
+# We test BUSINESS invariants (retention ∈ [0,1], paying ≤ cohort, cum_arppu
+# formula consistency) — the things SQL doesn't guarantee. We DON'T test
+# `not_null` on columns that are non-NULL by construction (`coalesce(..., 0)`
+# wrappers, `count(*) GROUP BY` outputs, window aggregates over non-NULL
+# inputs). The structural plumbing is enforced upstream in `marts/core`.
+#
+# Per-mart density is intentionally lighter than `marts/core` — core is
+# the single source of truth that all four marts derive from.
+
 models:
   - name: mart_retention_overall
     description: >
       Cohort retention table at (cohort_date × day_number) grain — no slice.
       Densified via day_numbers spine, so every (cohort, day_number ∈ [0..30])
       pair has a row even when no users were active. The dashboard reads
-      `SELECT * FROM this WHERE cohort_date BETWEEN ... ` with no extra logic.
+      `SELECT * FROM this WHERE cohort_date BETWEEN ...` with no extra logic.
     columns:
       - name: cohort_date
         description: Cohort anchor — first day this user_pseudo_id appears in the sample (UTC).
@@ -17,15 +28,12 @@ models:
         data_tests:
           - not_null
       - name: cohort_size
-        description: Number of users in the cohort. Same value across all 31 day_number rows of one cohort.
+        description: Number of users in the cohort. `count(*) GROUP BY cohort_date` — non-NULL by construction. Tested as `> 0` only.
         data_tests:
-          - not_null
           - dbt_utils.expression_is_true:
               expression: "> 0"
       - name: retained_users
-        description: Distinct users with any activity on this exact day_number.
-        data_tests:
-          - not_null
+        description: Distinct users with any activity on this exact day_number. `coalesce(..., 0)` in SQL → not_null is redundant.
       - name: retention_pct
         description: retained_users / cohort_size, in [0, 1].
         data_tests:
@@ -48,17 +56,13 @@ models:
       - name: cohort_date
         data_tests: [not_null]
       - name: install_platform
-        description: ANDROID/IOS at install time.
+        description: ANDROID/IOS at install time. `accepted_values` is covered by source contract.
         data_tests:
           - not_null
-          - accepted_values:
-              values: ["ANDROID", "IOS"]
       - name: day_number
         data_tests: [not_null]
       - name: cohort_size
-        data_tests: [not_null]
       - name: retained_users
-        data_tests: [not_null]
       - name: retention_pct
         data_tests:
           - dbt_utils.expression_is_true:
@@ -85,7 +89,6 @@ models:
       - name: day_number
         data_tests: [not_null]
       - name: cohort_size
-        data_tests: [not_null]
       - name: gross_revenue
         description: Revenue earned by the cohort on this exact day_number.
         data_tests:
@@ -113,6 +116,9 @@ models:
             - day_number
       - dbt_utils.expression_is_true:
           expression: "paying_users <= cohort_size"
+      - dbt_utils.expression_is_true:
+          expression: "cum_arppu is null or abs(cum_arppu - cum_revenue / nullif(cum_paying_users, 0)) < 0.0001"
+          name: mart_revenue_overall_cum_arppu_formula_consistent
 
   - name: mart_revenue_by_platform
     description: >
@@ -124,12 +130,9 @@ models:
       - name: install_platform
         data_tests:
           - not_null
-          - accepted_values:
-              values: ["ANDROID", "IOS"]
       - name: day_number
         data_tests: [not_null]
       - name: cohort_size
-        data_tests: [not_null]
       - name: gross_revenue
         data_tests:
           - dbt_utils.expression_is_true:

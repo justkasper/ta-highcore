@@ -19,15 +19,15 @@ models:
         data_tests:
           - not_null
       - name: install_platform
-        description: ANDROID/IOS at the time of the user's first event.
+        description: ANDROID/IOS at the time of the user's first event. `accepted_values` lives on the source — pure pass-through here.
         data_tests:
           - not_null
-          - accepted_values:
-              values: ["ANDROID", "IOS"]
       - name: install_country
         description: '`geo.country` at the time of the user''s first event.'
       - name: install_country_top5
-        description: 'Top-5 (US/IN/JP/CA/GB) plus `Other`.'
+        description: 'Top-5 (US/IN/JP/CA/GB) plus `Other`. `accepted_values` is intentionally NOT tested — top-5 list is computed dynamically; brittle as a hardcoded enum.'
+        data_tests:
+          - not_null
       - name: install_traffic_medium
         description: '`traffic_source.medium` at the time of the user''s first event.'
       - name: install_app_id

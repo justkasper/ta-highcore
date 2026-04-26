@@ -37,6 +37,9 @@ models:
         description: '`bool_or(previous_first_open_count > 0)` per user. ~1% of users.'
       - name: events_total
         description: Total event count for the user across the sample. Source for `is_outlier_events` in `dim_users`.
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: "> 0"
 
   - name: int_user_daily_activity
     description: >

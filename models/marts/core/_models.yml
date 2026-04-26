@@ -71,9 +71,15 @@ models:
           - dbt_utils.expression_is_true:
               expression: ">= 0"
       - name: events
-        description: Number of events for this user on this day.
+        description: Number of events for this user on this day. >= 1 by sparse construction.
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 1"
       - name: engagement_sec
         description: Sum of `engagement_time_msec` / 1000 for the day.
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
       - name: n_sessions_proxy
         description: Proxy session count (number of `session_start` events).
       - name: gross_revenue
@@ -82,7 +88,10 @@ models:
           - dbt_utils.expression_is_true:
               expression: ">= 0"
       - name: n_purchases
-        description: Number of `in_app_purchase` events on this day.
+        description: Number of `in_app_purchase` events on this day. 0 on non-purchase days.
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
       - name: paying_flag
         description: '`gross_revenue > 0` — was the user a payer on this day.'
     data_tests:
@@ -90,3 +99,11 @@ models:
           combination_of_columns:
             - user_pseudo_id
             - activity_date
+      - dbt_utils.expression_is_true:
+          expression: "paying_flag = (gross_revenue > 0)"
+          name: fct_user_daily_paying_flag_consistent_with_gross_revenue
+      # Intentionally NOT testing `(n_purchases > 0) = paying_flag`:
+      # the source has 3 in_app_purchase events with event_value_in_usd = NULL,
+      # which legitimately count toward n_purchases (count) but not toward
+      # gross_revenue (NULLs ignored by sum). paying_flag tracks actual
+      # money — that's the invariant we care about.

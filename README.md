@@ -11,6 +11,7 @@
 - Python 3.11+
 - make
 - ~2 GB свободного места на диске
+- ≥8 GB RAM для обычной работы; для cold rebuild `stg_events` см. [Локальные ограничения](#локальные-ограничения) ниже
 
 ## Установка
 
@@ -81,6 +82,15 @@ make docs
 - **`user_first_touch_timestamp` врёт у 97 %** пользователей; `first_open` event есть только у 28 %. Поэтому когорта = `min(event_date_utc) per user_pseudo_id`, не `uft` и не `first_open`.
 
 Подробнее — в `docs/data_exploration.md` и `docs/assumptions.md`.
+
+## Локальные ограничения
+
+Имеют значение только для DuckDB-локалки; на BigQuery в проде не воспроизводятся.
+
+- **Cold rebuild `stg_events` на 8 GB-машинах не помещается в один CTAS.** Источник — 5.7M строк × жирный struct (`event_params`, `user_properties`, `device`, `geo`, …); даже с агрессивным spill'ом transient resident memory пробивает OS OOM-threshold. DuckDB-сессия SIGKILL'ится после ~7 GB записанного temp-spill'а.
+- **Workaround:** батчировать `INSERT INTO stg_events` по `event_date` (114 чанков × ~50K строк). Каждый чанк тривиален по памяти и дедуп локален к дню — корректно, потому что дубликаты по `(user_pseudo_id, event_timestamp, event_name)` не пересекают границу суток (event_timestamp уникален). На ≥16 GB машинах батчирование не нужно, model SQL отрабатывает as-is.
+- **`profiles.yml` зажат под маленькие машины:** `threads=1`, `memory_limit=2GB`, `preserve_insertion_order=false`. На проде BQ эти настройки не применяются (это локальный duckdb-профиль).
+- **Dedup переписан с `qualify row_number() over (...)` на hash-aggregate** (`list(_src_rowid order by ...)[2:]` + anti-join). Логически идентично, но без глобального sort'а: per-group sort внутри list-агрегата тривиален при `having count(*) > 1` (99% групп выкидываются как уникальные). Само по себе OOM не лечит — bottleneck в типизированной проекции / write-фазе, не в дедупе — но даёт меньший memory footprint и упрощает миграцию на BQ (там это естественно ложится на `qualify`).
 
 ## Структура репозитория
 

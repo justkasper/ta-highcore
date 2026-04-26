@@ -74,5 +74,6 @@ metrics as (
 
 select
     metrics.*,
-    {{ trailing_avg('cum_arpu', 'day_number, install_platform') }}::numeric(18, 4) as cum_arpu_trailing_4w_avg
+    {{ trailing_avg('cum_arpu', 'day_number, install_platform') }}::numeric(18, 4) as cum_arpu_trailing_4w_avg,
+    {{ trailing_avg('paying_share', 'day_number, install_platform') }}::numeric(18, 4) as paying_share_trailing_4w_avg
 from metrics

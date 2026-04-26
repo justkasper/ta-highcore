@@ -170,7 +170,7 @@ models:
         - `cum_paying_users` is the sum of daily distinct payers across days, NOT the count of distinct users over the window. A user paying on D2 and D5 contributes to BOTH days' `paying_users` and therefore +2 to `cum_paying_users`. Treat it as "cumulative paying-user-days", not "cumulative unique payers".
         - Sample is tiny: 27 in_app_purchase events / 24 distinct payers / $24.89 total. NULL `cum_arppu` is common at low day_numbers.
         - `not_null` intentionally NOT tested on metric columns — non-NULL by construction (window sums of coalesce'd inputs); `cum_arppu` is intentionally nullable.
-        - `cum_arpu_trailing_4w_avg` is NULL for the first cohort at each `day_number` (no preceding history), and accumulates to a stable 28-cohort window thereafter. NULL is intentional and renders as "no baseline yet" on the dashboard.
+        - `cum_arpu_trailing_4w_avg` and `paying_share_trailing_4w_avg` are NULL for the first cohort at each `day_number` (no preceding history), and accumulate to a stable 28-cohort window thereafter. NULL is intentional and renders as "no baseline yet" on the dashboard.
     meta:
       owner: analytics-eng
       business_domain: mobile-game-analytics
@@ -220,6 +220,17 @@ models:
           Used by dashboard Block 5 ("cum ARPU curves — current vs
           baseline") — see `docs/dashboard_sketch.md`. Headless-BI
           surface so BI does not compute the window itself.
+      - name: paying_share_trailing_4w_avg
+        description: |
+          Trailing 4-week (28-cohort) average of `paying_share` over the
+          preceding cohorts at the same `day_number`. Window:
+          `avg(paying_share) over (partition by day_number order by
+          cohort_date rows between 28 preceding and 1 preceding)`. Same
+          NULL-on-first-cohort / accumulating-window semantics as
+          `cum_arpu_trailing_4w_avg`. Decimal in [0, 1] (NUMERIC(18,4)).
+          Used by dashboard KPI Block 4.1 ("PAY% delta vs trailing 28-day
+          baseline") — closes the last BI-side window-AVG so the dashboard
+          stays headless. See `docs/dashboard_sketch.md`.
     data_tests:
       - dbt_utils.unique_combination_of_columns:
           combination_of_columns:
@@ -251,7 +262,7 @@ models:
         - All `mart_revenue_overall` edge cases apply per-platform.
         - With ~$25 of revenue across 24 payers TOTAL, per-platform numbers are EXTREMELY sparse — many cells have `paying_users = 0` and `cum_arppu = NULL`. Kept in scope to demonstrate the pattern (see `docs/architecture.md` decision #4).
         - Window partition is `(cohort_date, install_platform)` — `cum_*` monotonicity holds within each (cohort, platform) cell, not across platforms.
-        - `cum_arpu_trailing_4w_avg` partition includes `install_platform`, so each platform has its own baseline — iOS history does not contaminate Android baselines and vice versa. NULL semantics same as `mart_revenue_overall` (first cohort per platform per day_number is NULL).
+        - `cum_arpu_trailing_4w_avg` and `paying_share_trailing_4w_avg` partitions include `install_platform`, so each platform has its own baseline — iOS history does not contaminate Android baselines and vice versa. NULL semantics same as `mart_revenue_overall` (first cohort per platform per day_number is NULL).
     meta:
       owner: analytics-eng
       business_domain: mobile-game-analytics
@@ -297,6 +308,16 @@ models:
           own baseline — iOS and Android compute independently.
           NULL for the first cohort at each (`day_number`,
           `install_platform`) cell. NUMERIC(18,4).
+      - name: paying_share_trailing_4w_avg
+        description: |
+          Per-platform trailing 4-week (28-cohort) average of
+          `paying_share`. Window:
+          `avg(paying_share) over (partition by day_number,
+          install_platform order by cohort_date rows between 28
+          preceding and 1 preceding)`. Each `install_platform` has its
+          own baseline. NULL-on-first-cohort / accumulating-window
+          semantics same as `cum_arpu_trailing_4w_avg`. Decimal in
+          [0, 1] (NUMERIC(18,4)).
     data_tests:
       - dbt_utils.unique_combination_of_columns:
           combination_of_columns:

@@ -48,11 +48,9 @@ models:
         data_tests:
           - not_null
       - name: platform
-        description: Client platform. Two product builds in the sample.
+        description: Client platform. Two product builds in the sample. `accepted_values` lives on the source — it's pure pass-through here.
         data_tests:
           - not_null
-          - accepted_values:
-              values: ["ANDROID", "IOS"]
       - name: event_value_in_usd
         description: >
           USD value of the purchase. NULL for non-monetized events; > 0 only on
@@ -73,7 +71,9 @@ models:
       - name: ga_session_id
         description: '`event_params.ga_session_id`. Always NULL in this sample; kept for parity with the live stream contract.'
       - name: device_category
-        description: '`device.category` (`mobile` / `tablet`).'
+        description: '`device.category` — verified `mobile` / `tablet` only, 0% null on the sample.'
+        data_tests:
+          - not_null
       - name: device_os
         description: '`device.operating_system` with the literal `"NaN"` string normalized to NULL.'
       - name: country

@@ -6,43 +6,62 @@
 }}
 
 {#-
-    Materialization override (view → table) is local to DuckDB. Rationale:
-    every downstream view re-scans the 5.7M-row source on every test run,
-    which made `dbt test` push DuckDB into OOM under default 4-thread
-    concurrency. Persisting the cleaned event stream once turns subsequent
-    test queries into millisecond-level scans.
+    Materialization override (view → table) is local to DuckDB: every
+    downstream view re-scans the 5.7M-row source on each test run, which
+    pushed `dbt test` into OOM under default concurrency. Persisting once
+    turns subsequent scans into milliseconds. The BQ-target config and
+    user-facing semantics live in `_models.yml`.
 
-    On BigQuery this becomes
-    `materialized=incremental, partition_by=event_date_utc,
-     unique_key=(user_pseudo_id, event_timestamp, event_name),
-     incremental_strategy='merge'` — the SQL stays the same.
-
-    Dedup is implemented in two phases (rowid + anti-join on losing duplicates)
-    rather than a single `qualify` over the full projection. The full row is
-    fat (event_params LIST<STRUCT>, user_properties LIST<STRUCT>, device STRUCT,
-    geo STRUCT, …); pushing all of that through a window operator is what
-    triggered OOM on 8 GB local DuckDB. The thin-key window fits comfortably,
-    and the dedup logic is identical.
+    Dedup uses a hash aggregate that emits only losing rowids
+    (`list(_src_rowid order by …)[2:]` after `having count(*) > 1`),
+    followed by an anti-join. `qualify row_number()` over the 5.7M-row
+    partition spilled past 8 GB on cold rebuild even on a thin key
+    projection. The aggregate has no global sort; per-group list-sort is
+    free because HAVING discards the ~99% groups of size 1, leaving only
+    a few thousand dupe groups, so the anti-join's build side is tiny.
 -#}
 
-with source as (
+with raw_events as (
     select rowid as _src_rowid, *
     from {{ source('raw', 'events') }}
 ),
 
+dedup_keys as (
+    -- thin projection so the aggregate scan is column-pruned at the parquet/
+    -- DuckDB reader and never holds the fat structs (event_params,
+    -- user_properties, device, geo, …) in memory.
+    select
+        _src_rowid,
+        user_pseudo_id,
+        event_timestamp,
+        event_name,
+        event_bundle_sequence_id,
+        event_server_timestamp_offset
+    from raw_events
+),
+
 losing_dupe_rowids as (
-    select _src_rowid
-    from source
-    qualify row_number() over (
-        partition by user_pseudo_id, event_timestamp, event_name
-        order by event_bundle_sequence_id nulls last,
-                 event_server_timestamp_offset nulls last
-    ) > 1
+    -- For each (user_pseudo_id, event_timestamp, event_name) group with
+    -- >1 rows, list rowids ordered by the same tie-break the original
+    -- window used (event_bundle_sequence_id NULLS LAST, then
+    -- event_server_timestamp_offset NULLS LAST — emulated via int64-max
+    -- sentinel because struct/list ORDER BY does not expose NULLS LAST
+    -- inside a list aggregate). Slice [2:] drops the canonical winner
+    -- and emits only the losers via UNNEST.
+    select unnest(
+        list(_src_rowid order by
+            coalesce(event_bundle_sequence_id, 9223372036854775807),
+            coalesce(event_server_timestamp_offset, 9223372036854775807)
+        )[2:]
+    ) as _src_rowid
+    from dedup_keys
+    group by user_pseudo_id, event_timestamp, event_name
+    having count(*) > 1
 ),
 
 deduped as (
     select *
-    from source
+    from raw_events
     where _src_rowid not in (select _src_rowid from losing_dupe_rowids)
 ),
 

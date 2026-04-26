@@ -4,4 +4,3 @@ highcore_ae_test:
     dev:
       type: duckdb
       path: ./data/warehouse.duckdb
-      threads: 4

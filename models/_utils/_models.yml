@@ -1,0 +1,17 @@
+version: 2
+
+models:
+  - name: day_numbers
+    description: >
+      Date-spine 0..30 (inclusive, 31 rows). Used only by `marts/reports/*` to
+      densify the (cohort_date × day_number) grid over the sparse
+      `fct_user_daily`. Changing the D-window is a one-line edit here.
+    columns:
+      - name: day_number
+        description: 0..30 inclusive (31 rows).
+        data_tests:
+          - not_null
+          - unique
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 30

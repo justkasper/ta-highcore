@@ -1,0 +1,156 @@
+version: 2
+
+# Test philosophy for this layer:
+# Reports are derived aggregates over `fct_user_daily` and `dim_users`.
+# We test BUSINESS invariants (retention ∈ [0,1], paying ≤ cohort, cum_arppu
+# formula consistency) — the things SQL doesn't guarantee. We DON'T test
+# `not_null` on columns that are non-NULL by construction (`coalesce(..., 0)`
+# wrappers, `count(*) GROUP BY` outputs, window aggregates over non-NULL
+# inputs). The structural plumbing is enforced upstream in `marts/core`.
+#
+# Per-mart density is intentionally lighter than `marts/core` — core is
+# the single source of truth that all four marts derive from.
+
+models:
+  - name: mart_retention_overall
+    description: >
+      Cohort retention table at (cohort_date × day_number) grain — no slice.
+      Densified via day_numbers spine, so every (cohort, day_number ∈ [0..30])
+      pair has a row even when no users were active. The dashboard reads
+      `SELECT * FROM this WHERE cohort_date BETWEEN ...` with no extra logic.
+    columns:
+      - name: cohort_date
+        description: Cohort anchor — first day this user_pseudo_id appears in the sample (UTC).
+        data_tests:
+          - not_null
+      - name: day_number
+        description: Days since cohort_date, 0..30.
+        data_tests:
+          - not_null
+      - name: cohort_size
+        description: Number of users in the cohort. `count(*) GROUP BY cohort_date` — non-NULL by construction. Tested as `> 0` only.
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: "> 0"
+      - name: retained_users
+        description: Distinct users with any activity on this exact day_number. `coalesce(..., 0)` in SQL → not_null is redundant.
+      - name: retention_pct
+        description: retained_users / cohort_size, in [0, 1].
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: "between 0 and 1"
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - cohort_date
+            - day_number
+      - dbt_utils.expression_is_true:
+          expression: "retained_users <= cohort_size"
+
+  - name: mart_retention_by_platform
+    description: >
+      Same shape as mart_retention_overall plus install_platform slice. Lets
+      the dashboard compare iOS vs Android cohorts side by side without a
+      JOIN at the BI layer.
+    columns:
+      - name: cohort_date
+        data_tests: [not_null]
+      - name: install_platform
+        description: ANDROID/IOS at install time. `accepted_values` is covered by source contract.
+        data_tests:
+          - not_null
+      - name: day_number
+        data_tests: [not_null]
+      - name: cohort_size
+      - name: retained_users
+      - name: retention_pct
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: "between 0 and 1"
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - cohort_date
+            - install_platform
+            - day_number
+      - dbt_utils.expression_is_true:
+          expression: "retained_users <= cohort_size"
+
+  - name: mart_revenue_overall
+    description: >
+      Cohort monetization table at (cohort_date × day_number) grain — no slice.
+      F2P 4-pack: gross_revenue, paying_users, cum_revenue, cum_paying_users,
+      cum_arpu, cum_arppu, paying_share. Cum_* are window sums over day_number
+      within each cohort and are monotonically non-decreasing (asserted in
+      tests/assert_cum_revenue_monotonic.sql).
+    columns:
+      - name: cohort_date
+        data_tests: [not_null]
+      - name: day_number
+        data_tests: [not_null]
+      - name: cohort_size
+      - name: gross_revenue
+        description: Revenue earned by the cohort on this exact day_number.
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: paying_users
+        description: Distinct payers seen on this exact day_number.
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: cum_revenue
+        description: Cumulative revenue from D0 through day_number.
+      - name: cum_paying_users
+        description: Cumulative distinct payers from D0 through day_number (note paying_users summed across days, not distinct over days — a user paying on D2 and D5 contributes to both).
+      - name: cum_arpu
+        description: cum_revenue / cohort_size.
+      - name: cum_arppu
+        description: cum_revenue / cum_paying_users; NULL until the first payer appears.
+      - name: paying_share
+        description: cum_paying_users / cohort_size.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - cohort_date
+            - day_number
+      - dbt_utils.expression_is_true:
+          expression: "paying_users <= cohort_size"
+      - dbt_utils.expression_is_true:
+          expression: "cum_arppu is null or abs(cum_arppu - cum_revenue / nullif(cum_paying_users, 0)) < 0.0001"
+          name: mart_revenue_overall_cum_arppu_formula_consistent
+
+  - name: mart_revenue_by_platform
+    description: >
+      Cohort monetization with install_platform slice. Same shape as
+      mart_revenue_overall plus install_platform in PK and window partition.
+    columns:
+      - name: cohort_date
+        data_tests: [not_null]
+      - name: install_platform
+        data_tests:
+          - not_null
+      - name: day_number
+        data_tests: [not_null]
+      - name: cohort_size
+      - name: gross_revenue
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: paying_users
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: cum_revenue
+      - name: cum_paying_users
+      - name: cum_arpu
+      - name: cum_arppu
+      - name: paying_share
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - cohort_date
+            - install_platform
+            - day_number
+      - dbt_utils.expression_is_true:
+          expression: "paying_users <= cohort_size"

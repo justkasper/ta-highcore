@@ -1,0 +1,109 @@
+version: 2
+
+models:
+  - name: dim_users
+    description: >
+      User dimension. One row per `user_pseudo_id`. Clean star schema: every
+      slowly-changing user attribute lives here; `fct_user_daily` references
+      it via `relationships`. Source for cohort_size in `reports/`.
+      `is_outlier_events` is a dynamic flag (events_total > p99) — surfaced,
+      not auto-filtered.
+    columns:
+      - name: user_pseudo_id
+        description: Primary key.
+        data_tests:
+          - not_null
+          - unique
+      - name: cohort_date
+        description: Cohort anchor — `min(event_date_utc) per user`.
+        data_tests:
+          - not_null
+      - name: install_platform
+        description: ANDROID/IOS at the time of the user's first event. `accepted_values` lives on the source — pure pass-through here.
+        data_tests:
+          - not_null
+      - name: install_country
+        description: '`geo.country` at the time of the user''s first event.'
+      - name: install_country_top5
+        description: 'Top-5 (US/IN/JP/CA/GB) plus `Other`. `accepted_values` is intentionally NOT tested — top-5 list is computed dynamically; brittle as a hardcoded enum.'
+        data_tests:
+          - not_null
+      - name: install_traffic_medium
+        description: '`traffic_source.medium` at the time of the user''s first event.'
+      - name: install_app_id
+        description: '`app_info.id` (1:1 with `install_platform`).'
+      - name: first_event_name
+        description: Name of the user's first event.
+      - name: is_reinstall
+        description: '`bool_or(previous_first_open_count > 0)` per user.'
+      - name: is_outlier_events
+        description: '`events_total > percentile_cont(0.99)` — flag, not a filter.'
+
+  - name: fct_user_daily
+    description: >
+      ★ Central fact ★. Sparse: one row per (user_pseudo_id, activity_date)
+      where the user had at least one event on that day. There is no
+      `is_active` column — row presence plays that role. Source for every
+      report mart and for user-level drill-downs.
+
+      `cohort_date` is denormalized here from `dim_users` so reports can
+      filter without an extra JOIN. day_number = activity_date - cohort_date.
+    columns:
+      - name: user_pseudo_id
+        description: Foreign key → `dim_users`.
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_users')
+              field: user_pseudo_id
+      - name: cohort_date
+        description: '`dim_users.cohort_date` (denormalized). Used to group cohorts in reports.'
+        data_tests:
+          - not_null
+      - name: activity_date
+        description: UTC date of activity.
+        data_tests:
+          - not_null
+      - name: day_number
+        description: '`activity_date - cohort_date`. >= 0 by construction.'
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: events
+        description: Number of events for this user on this day. >= 1 by sparse construction.
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 1"
+      - name: engagement_sec
+        description: Sum of `engagement_time_msec` / 1000 for the day.
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: n_sessions_proxy
+        description: Proxy session count (number of `session_start` events).
+      - name: gross_revenue
+        description: '`sum(event_value_in_usd)` per (user, day) on purchase days; 0 when no purchase happened.'
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: n_purchases
+        description: Number of `in_app_purchase` events on this day. 0 on non-purchase days.
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: paying_flag
+        description: '`gross_revenue > 0` — was the user a payer on this day.'
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - user_pseudo_id
+            - activity_date
+      - dbt_utils.expression_is_true:
+          expression: "paying_flag = (gross_revenue > 0)"
+          name: fct_user_daily_paying_flag_consistent_with_gross_revenue
+      # Intentionally NOT testing `(n_purchases > 0) = paying_flag`:
+      # the source has 3 in_app_purchase events with event_value_in_usd = NULL,
+      # which legitimately count toward n_purchases (count) but not toward
+      # gross_revenue (NULLs ignored by sum). paying_flag tracks actual
+      # money — that's the invariant we care about.

@@ -2,16 +2,30 @@ version: 2
 
 models:
   - name: day_numbers
-    description: >
-      Date-spine 0..30 (inclusive, 31 rows). Used only by `marts/reports/*` to
-      densify the (cohort_date × day_number) grid over the sparse
-      `fct_user_daily`. Changing the D-window is a one-line edit here.
+    description: |
+      ROLE: Date-spine for densification of (cohort_date × day_number) grids in
+      `marts/reports/*`.
+      USE WHEN: Need to cross-join the D-window onto a cohort to densify a
+      sparse fact (every report mart does this).
+      DON'T USE FOR: Anything else — this is a pure utility view; not a calendar,
+      not a dimension.
+
+      GRAIN: One row per `day_number` ∈ [0..`var('max_day_number')`] inclusive
+      (default: 31 rows for D0..D30).
+      PK: day_number
+      FK: none.
+      DOWNSTREAM: mart_retention_overall, mart_retention_by_platform, mart_revenue_overall, mart_revenue_by_platform.
+
+      EDGE CASES:
+        - Upper bound is parameterized via `var('max_day_number')` (default 30, set in `dbt_project.yml`). Single source of truth: the same var drives the spine here AND the `where day_number between 0 and var(...)` filters in every mart's `fct_user_daily` scan. Extending to D60/D90 is a single var change.
+    meta:
+      owner: analytics-eng
     columns:
       - name: day_number
-        description: 0..30 inclusive (31 rows).
+        description: 'Integer days from cohort anchor. Range: 0..`var(''max_day_number'')` inclusive.'
         data_tests:
           - not_null
           - unique
           - dbt_utils.accepted_range:
               min_value: 0
-              max_value: 30
+              max_value: "{{ var('max_day_number') }}"

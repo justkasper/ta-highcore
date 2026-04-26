@@ -6,16 +6,16 @@
     event for 97% of users; the `first_open` event is present for only 28%).
     See docs/data_exploration.md.
 
-    `install_*` attributes are taken from the row of the user's first event,
-    with a deterministic tiebreak on `event_name` (alphabetical) when multiple
-    events share the same microsecond.
+    `install_*` attributes are taken from the row of the user's first event.
+    Tie-break on equal `event_ts_utc`: alphabetical `event_name`, then
+    `event_bundle_sequence_id NULLS LAST`, then
+    `event_server_timestamp_offset NULLS LAST` — deterministic across re-runs
+    and against the rare case where two events share `(timestamp, event_name)`
+    (which would happen only if upstream `stg_events` dedup ever regresses).
 
     `is_reinstall` is `bool_or(previous_first_open_count > 0)` per user.
     `previous_first_open_count` is populated only on `event_name = 'first_open'`,
     so `bool_or` is the right NULL-safe aggregator across all events.
-
-    Top-5 `install_country` is computed dynamically from the data — a hardcoded
-    list would be fragile to refresh.
 -#}
 
 with stg as (
@@ -26,7 +26,7 @@ first_event as (
     select
         user_pseudo_id,
         min(event_date_utc) as cohort_date,
-        min(event_ts_utc)   as first_event_ts
+        min(event_ts_utc) as first_event_ts
     from stg
     group by 1
 ),
@@ -34,14 +34,18 @@ first_event as (
 attrs as (
     select
         s.user_pseudo_id,
-        s.platform                    as install_platform,
-        s.country                     as install_country,
-        s.traffic_medium              as install_traffic_medium,
-        s.app_id                      as install_app_id,
-        s.event_name                  as first_event_name,
+        s.platform as install_platform,
+        s.country as install_country,
+        s.traffic_medium as install_traffic_medium,
+        s.app_id as install_app_id,
+        s.event_name as first_event_name,
         row_number() over (
             partition by s.user_pseudo_id
-            order by s.event_ts_utc, s.event_name
+            order by
+                s.event_ts_utc,
+                s.event_name,
+                s.event_bundle_sequence_id nulls last,
+                s.event_server_timestamp_offset nulls last
         ) as rn
     from stg s
     join first_event f
@@ -63,15 +67,6 @@ events_total as (
         count(*) as events_total
     from stg
     group by 1
-),
-
-top5_countries as (
-    select country
-    from stg
-    where country is not null
-    group by 1
-    order by count(distinct user_pseudo_id) desc
-    limit 5
 )
 
 select
@@ -79,15 +74,10 @@ select
     f.cohort_date,
     a.install_platform,
     a.install_country,
-    case
-        when a.install_country in (select country from top5_countries)
-            then a.install_country
-        else 'Other'
-    end                                    as install_country_top5,
     a.install_traffic_medium,
     a.install_app_id,
     a.first_event_name,
-    coalesce(r.is_reinstall, false)        as is_reinstall,
+    coalesce(r.is_reinstall, false) as is_reinstall,
     e.events_total
 from first_event f
 left join attrs a

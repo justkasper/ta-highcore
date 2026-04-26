@@ -25,7 +25,6 @@ select
     b.cohort_date,
     b.install_platform,
     b.install_country,
-    b.install_country_top5,
     b.install_traffic_medium,
     b.install_app_id,
     b.first_event_name,

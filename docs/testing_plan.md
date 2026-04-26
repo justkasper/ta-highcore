@@ -75,8 +75,9 @@
 | Staging `stg_events` | 7 | — | 7 (–1 accepted, +1 device_category not_null) | — | 0 |
 | Intermediate (3 view) | 9 | — | **5** (–4: trim) | — | 0 |
 | `_utils/day_numbers` | 3 | — | 3 | — | — |
-| Core `dim_users` | 5 | — | **7** (+2: not_null country_top5, events_total > 0; –1 accepted_values platform) | — | **3** |
-| Core `fct_user_daily` | 8 | — | **11** (+5: events≥1, paying_flag, engagement_sec≥0, n_purchases≥0, n_purchases↔paying_flag) | — | **3** |
+| Core `dim_users` | 5 | — | **6** (+1 not_null country_top5; –1 accepted_values platform) | — | **1** |
+| Core `fct_user_daily` | 8 | — | **11** (+4: events≥1, engagement_sec≥0, n_purchases≥0, paying_flag↔gross_revenue; D0 sub-test) | — | **3** |
+| Intermediate (`int_user_install`) | — | — | — | — | **1** |
 | Reports (4 mart) | 30 | — | **~24** (–~7: trim not_null на coalesce'ных колонках; +1 cum_arppu invariant) | — | **3** |
 | `tests/` (singular) | — | 6 | — | **9** (+3 by_platform/reconciliation, +1 fct↔dim cohort_date, –1 удалён as duplicate) | — |
 | **Итого** | **62** | **6** | **~62** | **9** | **9** |
@@ -157,7 +158,7 @@
 | **add** `not_null` на `install_country_top5` | error | Completeness | Каждый юзер должен иметь либо страну из топ-5, либо `'Other'` — NULL = баг в CASE. |
 | **add** `expression_is_true: events_total > 0` | error | Validity | Каждый юзер виден в источнике (cohort_date по построению). Ловит баг в `events_total` CTE. |
 | **drop** `accepted_values` на `install_platform` | — | — | Покрыто на source (`platform` пасс-тру через staging → `int_user_install` → `dim_users`). |
-| ~~`accepted_values` на `install_country_top5`~~ | — | — | **Не добавляем.** Список считается динамически в CTE; зависит от данных и может легитимно меняться. Корректность fallback в `'Other'` — через unit-тест. |
+| ~~`accepted_values` на `install_country_top5`~~ | — | — | **Не добавляем.** Список считается динамически в CTE; зависит от данных и может легитимно меняться. И unit-тест на fallback тоже не делаем — это тестирование динамики, цена/ценность плохая. |
 | ~~`expression_is_true: cohort_date between …`~~ | — | — | **Не добавляем.** Это статический факт о датасете, а не инвариант модели. Документируем в `_sources.yml.description` и в `dim_users` description. |
 
 #### `fct_user_daily` — generic
@@ -219,7 +220,8 @@
 | Модель | Что unit-тестировать | Почему unit, а не data test |
 |---|---|---|
 | **`fct_user_daily`** | (1) Sparse-семантика: юзер активен в день D и купил в этот же D → одна строка, `gross_revenue > 0`, `paying_flag = true`. (2) Юзер активен в D, не купил → одна строка, `gross_revenue = 0`, `paying_flag = false`. (3) Day_number arithmetic: mock `cohort_date='2018-06-12'`, `activity_date='2018-06-19'` → `day_number = 7`. | join + COALESCE + производное поле в детерминированных условиях. data test увидит «всё ок в среднем», unit — что **именно эта** строка собралась правильно. |
-| **`dim_users`** | (1) p99-граница: на mock из 100 юзеров с `events_total ∈ {1..100}` → outliers = только тот, что строго > p99 (не ≥). (2) `install_country_top5` fallback: страна вне топ-5 → `'Other'`; страна в топ-5 → как есть. (3) `is_reinstall = bool_or(previous_first_open_count > 0)`: юзер с `previous_first_open_count = 5` → `is_reinstall=true`; юзер без `first_open` → `false`. | Динамический p99 + CASE + bool_or — три независимые ветви, легко регрессировать одной правкой; unit ловит каждую. |
+| **`dim_users`** | (1) p99-граница: на mock из 4 юзеров → outlier только тот, что строго > p99 (не ≥). | Тестируем строгое неравенство в одной строке кода; data test эту границу не зафиксирует. |
+| **`int_user_install`** | (1) `is_reinstall = bool_or(previous_first_open_count > 0)`: юзер с `previous_first_open_count = 5` → `is_reinstall=true`; юзер без `first_open` → `false` (NULL-safe). | bool_or vs max — лёгкая регрессия при рефакторинге; NULL-семантика. |
 | **`mart_revenue_overall`** | (1) `cum_arppu` NULL handling: когорта без платящих → `cum_arppu = NULL` (а не 0/0 ошибка). (2) Cumulative correctness: mock 3 дня по $1 → `cum_revenue = $1, $2, $3`, `cum_arpu = $1/N, $2/N, $3/N`. (3) Densification: когорта в которой никто не дошёл до D5 → строка существует, `gross_revenue=0`, `paying_users=0`. | Window-функции с NULL-edge case + кумулятивы — самый рисковый код в репо. Один баг в `case when sum() = 0 then null else …` ломает все когорты, но в текущих данных воспроизводится в < 1% случаев — unit ловит детерминированно. |
 
 **Не unit-тестируем:**

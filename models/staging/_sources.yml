@@ -3,9 +3,40 @@ version: 2
 sources:
   - name: raw
     schema: raw
+    description: >
+      Raw Firebase Analytics events from the public BigQuery sample
+      `firebase-public-project.analytics_153293282` (mobile F2P game
+      "Flood-It!"). The export is a static slice loaded from parquet,
+      not a live stream — see README "Известные особенности датасета"
+      for the artefacts we deliberately don't test (freshness, 50k/day
+      cap, ~207 source duplicates, TZ skew, lying
+      user_first_touch_timestamp). Period: 2018-06-12 → 2018-10-03
+      (UTC events spill to 2018-10-04 07:01).
     tables:
       - name: events
         description: >
-          Raw Firebase Analytics events from a mobile F2P game (Flood It!).
-          Contains nested fields: event_params, user_properties, device, geo.
-          Period: 2018-06-12 to 2018-10-03.
+          One row per Firebase event (~5.7M rows). Nested fields:
+          event_params, user_properties, device, geo, app_info,
+          traffic_source, user_ltv. Primary key after dedup:
+          (user_pseudo_id, event_timestamp, event_name) — uniqueness
+          is asserted on the deduplicated `stg_events`, not here
+          (source carries 207 bit-identical duplicates by design).
+        columns:
+          - name: user_pseudo_id
+            description: Stable, 100%-coverage user identifier. Source contract — must never be NULL.
+            data_tests:
+              - not_null
+          - name: event_timestamp
+            description: Microseconds since epoch. Source contract — non-null.
+            data_tests:
+              - not_null
+          - name: event_name
+            description: Firebase event name. 37 distinct values in the sample.
+            data_tests:
+              - not_null
+          - name: platform
+            description: Client platform. Two product builds in the sample.
+            data_tests:
+              - not_null
+              - accepted_values:
+                  values: ["ANDROID", "IOS"]

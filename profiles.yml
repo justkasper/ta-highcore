@@ -10,6 +10,7 @@ highcore_ae_test:
       # the OS OOM threshold so spill kicks in before the OS does.
       threads: 1
       settings:
-        memory_limit: '2GB'
+        memory_limit: '1500MB'
         threads: 1
         preserve_insertion_order: false
+        temp_directory: './data/warehouse.duckdb.tmp'

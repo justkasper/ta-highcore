@@ -1,4 +1,3 @@
--- See `tests/_tests.yml` for full docs.
 
 select
     fct.user_pseudo_id,

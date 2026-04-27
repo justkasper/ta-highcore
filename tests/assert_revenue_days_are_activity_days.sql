@@ -1,4 +1,3 @@
--- See `tests/_tests.yml` for full docs.
 
 select
     r.user_pseudo_id,

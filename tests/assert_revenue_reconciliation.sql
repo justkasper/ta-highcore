@@ -1,4 +1,3 @@
--- See `tests/_tests.yml` for full docs.
 
 with mart_side as (
     select sum(cum_revenue)::numeric(18, 4) as total_revenue_d30

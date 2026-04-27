@@ -1,4 +1,3 @@
--- See `tests/_tests.yml` for full docs.
 
 with mart_total as (
     select sum(cohort_size) as users_in_mart

@@ -75,3 +75,7 @@ The non-obvious DuckDB / Firebase patterns (see `models/staging/stg_events.sql` 
   - В YAML (`_models.yml`, `_sources.yml`, `_unit_tests.yml`, `_tests.yml`, `_macros.yml`) свободный текст описаний / EDGE CASES / meta не ссылается на `docs/*.md`. YAML рендерится в `dbt docs`; внешняя `.md`-ссылка там некликабельна и неинформативна. Нужен контекст — инлайн одной фразой.
   - В SQL-файлах (`models/**/*.sql`, `tests/*.sql`, `macros/*.sql`) заголовочный стуб вида `-- See tests/_tests.yml for full docs` — шум: файлы парные по имени, doc-блок найдут и так.
   - Исключение: doc-blocks через нативную dbt-механику (`{% docs name %} … {% enddocs %}` файлы и `doc('name')` в YAML) — это легитимный реюз внутри dbt.
+
+## SQL-header в моделях — только implementation rationale
+
+SQL-header (top-of-file `{#- ... -#}` блок) допустим только для DuckDB-/dialect-specific implementation rationale, которого нет в YAML. Семантика (роль, грейн, EDGE CASES) — в `_models.yml`. Drift-чек: «если убрать header, теряется ли что-то про *как именно работает SQL*?» Если нет — header удаляется. Текущий рабочий пример — `models/staging/stg_events.sql:7-19` (DuckDB-only materialization override + int64-max sentinel в dedup tie-break).

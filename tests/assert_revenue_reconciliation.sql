@@ -2,7 +2,7 @@
 with mart_side as (
     select sum(cum_revenue)::numeric(18, 4) as total_revenue_d30
     from {{ ref('mart_revenue_overall') }}
-    where day_number = 30
+    where day_number = {{ var('max_day_number') }}
 ),
 
 stg_side as (

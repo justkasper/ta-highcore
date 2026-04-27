@@ -1,6 +1,4 @@
--- Cumulative revenue must be monotonically non-decreasing as day_number
--- grows within each (cohort_date, install_platform) partition. Same shape
--- as assert_cum_revenue_monotonic.sql, applied to the platform slice.
+-- See `tests/_tests.yml` for full docs.
 
 with ordered as (
     select

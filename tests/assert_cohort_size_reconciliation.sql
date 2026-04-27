@@ -1,7 +1,4 @@
--- The total of cohort_size at D0 across all cohorts in mart_retention_overall
--- must equal the total user count in dim_users. Any discrepancy means we lost
--- (or duplicated) users somewhere between the dim and the densified retention
--- grid.
+-- See `tests/_tests.yml` for full docs.
 
 with mart_total as (
     select sum(cohort_size) as users_in_mart

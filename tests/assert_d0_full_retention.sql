@@ -1,7 +1,4 @@
--- On day_number = 0, every cohort member is active by construction
--- (cohort_date = first observed event date). So retained_users must equal
--- cohort_size and retention_pct must equal 1.0 in every D0 row.
--- Any deviation flags a join/aggregation bug in the retention mart.
+-- See `tests/_tests.yml` for full docs.
 
 select
     cohort_date,

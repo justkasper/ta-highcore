@@ -1,12 +1,4 @@
--- End-to-end paying-users reconciliation:
---   distinct payers attributed in mart_revenue_overall (any cohort, any
---   day_number 0..30) must equal distinct users with at least one
---   in_app_purchase event in stg_events that fell inside their D0..D30
---   cohort window.
---
--- Catches drift between the source revenue stream and the cohort-attributed
--- count in the dashboard. Complements assert_revenue_reconciliation.sql
--- (which checks dollars).
+-- See `tests/_tests.yml` for full docs.
 
 with mart_payers as (
     select count(distinct dim.user_pseudo_id) as payer_count

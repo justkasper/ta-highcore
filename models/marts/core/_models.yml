@@ -73,7 +73,7 @@ models:
       DOWNSTREAM: mart_retention_overall, mart_retention_by_platform, mart_revenue_overall, mart_revenue_by_platform.
 
       EDGE CASES:
-        - Row presence = `is_active` (semantic + cheaper on BigQuery — see docs/architecture.md). Days without activity are NOT materialized; downstream marts densify via `day_numbers`.
+        - Row presence = `is_active` (semantic + cheaper on BigQuery: dense fact would carry ~60% rows with `is_active = 0`, scanned for nothing). Days without activity are NOT materialized; downstream marts densify via `day_numbers`.
         - `cohort_date` is denormalized from `dim_users` so reports can filter cohorts without an extra JOIN.
         - `paying_flag = (gross_revenue > 0)` — NOT `(n_purchases > 0)`. Three source `in_app_purchase` events have `event_value_in_usd = NULL`, which legitimately count toward `n_purchases` (count) but not toward `gross_revenue` (NULLs ignored by sum). `paying_flag` tracks ACTUAL money, which is the invariant we care about. The `(n_purchases > 0) = paying_flag` invariant is intentionally NOT tested.
         - `gross_revenue = 0` (not NULL) on non-purchase days, via `coalesce` in the LEFT JOIN — non-payer days are explicit zeros, not absent.

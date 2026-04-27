@@ -1,7 +1,4 @@
--- Cumulative revenue must be monotonically non-decreasing within each cohort
--- as day_number grows. Any (cohort_date, day_number) row whose cum_revenue is
--- strictly less than the previous day's cum_revenue is a window-function
--- ordering bug.
+-- See `tests/_tests.yml` for full docs.
 
 with ordered as (
     select

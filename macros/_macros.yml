@@ -1,0 +1,94 @@
+version: 2
+
+macros:
+  - name: cum_sum
+    description: |
+      ROLE: Cumulative running sum over `partition_by`, ordered by `day_number`,
+      framed `rows between unbounded preceding and current row`.
+      USE WHEN: Need a partition-scoped cumulative metric in a cohort fact
+      (revenue marts, retention marts).
+      DON'T USE FOR: Trailing windows that should EXCLUDE the current row —
+      use `trailing_avg` (or write the explicit frame) instead.
+
+      EDGE CASES:
+        - Frame is `rows`, not `range`, deliberately. BigQuery defaults to
+          `range between unbounded preceding and current row` for `order by`,
+          which buckets ties; explicit `rows` removes that ambiguity and keeps
+          the compiled SQL portable to BQ unchanged.
+    arguments:
+      - name: col
+        type: string
+        description: Column to accumulate (e.g. `gross_revenue`).
+      - name: partition_by
+        type: string
+        description: |
+          Raw SQL fragment for the partition columns
+          (e.g. `cohort_date` or `cohort_date, install_platform`).
+
+  - name: trailing_avg
+    description: |
+      ROLE: Trailing window average of `col` over preceding cohorts. Used to
+      surface "current cohort vs trailing baseline" metrics on the dashboard
+      (see `docs/dashboard_sketch.md`) without forcing BI to compute the window
+      itself.
+      USE WHEN: Need a per-`day_number` baseline derived from prior cohorts —
+      typically against `retention_pct` or `cum_arpu`.
+      DON'T USE FOR: Cumulative within-cohort sums — use `cum_sum`.
+
+      EDGE CASES:
+        - Window EXCLUDES the current row (`rows between N preceding and 1
+          preceding`) so the baseline is independent of the cohort being
+          compared against it.
+        - Returns NULL for the first cohort at each partition (no preceding
+          history). Intentional — the dashboard renders NULL as
+          "no baseline yet".
+    arguments:
+      - name: col
+        type: string
+        description: |
+          Column to average. Must already exist in the calling SELECT scope
+          (typically a metric like `retention_pct` or `cum_arpu`).
+      - name: partition_by
+        type: string
+        description: |
+          Raw SQL fragment for the window partition. Hold `day_number`
+          constant; extend with slice columns where the baseline should be
+          per-slice. Examples:
+            - `day_number`                   — overall mart
+            - `day_number, install_platform` — sliced mart
+      - name: days
+        type: integer
+        description: Window length in preceding cohorts. Default `28` (4 weeks).
+
+  - name: revenue_metrics_columns
+    description: |
+      ROLE: Emits the cumulative revenue-metrics SELECT-list block shared by
+      `mart_revenue_overall` and `mart_revenue_by_platform`.
+      USE WHEN: Building a cumulative revenue mart at any
+      (cohort × day_number) grain — keeps the metric definitions in one place.
+      DON'T USE FOR: Non-revenue marts; partial slices of these columns (the
+      block emits all five together).
+
+      OUTPUT COLUMNS (in order):
+        cum_revenue, cum_paying_users, cum_arpu, cum_arppu, paying_share
+
+      EXPECTED COLUMNS IN CALLER SCOPE:
+        - `gross_revenue`, `paying_users` — daily counters (post coalesce-to-zero)
+        - `cohort_size`                   — denominator at the same grain as
+                                            `partition_by`
+        - `day_number`                    — used as the window order
+
+      EDGE CASES:
+        - Trailing comma is intentionally omitted — the macro emits the LAST
+          columns of the SELECT-list, so the caller MUST NOT append more
+          columns after the macro call.
+        - `cum_arppu` returns NULL when `cum_paying_users = 0` (cohort has had
+          no payers yet); avoids div-by-zero.
+    arguments:
+      - name: partition_by
+        type: string
+        description: |
+          Raw SQL fragment for the cumulative window's partition columns. Must
+          be the SAME grain that produced `cohort_size`. Examples:
+            - `cohort_date`                   — overall mart
+            - `cohort_date, install_platform` — sliced mart

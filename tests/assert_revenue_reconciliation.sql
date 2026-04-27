@@ -1,11 +1,4 @@
--- End-to-end revenue reconciliation:
---   total cum_revenue at the LAST seen day_number per cohort, summed across
---   cohorts (= D30 cumulative revenue per cohort)
--- must equal the sum of in_app_purchase event_value_in_usd from stg_events
--- restricted to events that fall inside that user's D0..D30 cohort window.
---
--- Casts are aligned to numeric(18,4) on both sides so float drift cannot
--- introduce false positives.
+-- See `tests/_tests.yml` for full docs.
 
 with mart_side as (
     select sum(cum_revenue)::numeric(18, 4) as total_revenue_d30

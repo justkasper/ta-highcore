@@ -36,7 +36,7 @@
 
 - [ ] **Skipped** per user — стратегия слияния веток вне scope этого захода.
 
-`README.md` §2.1, §3, §8 ссылается на `docs/data_exploration.md`, `docs/eda_report.md`, `docs/eda_tests.md`, `docs/assumptions.md`. Эти файлы лежат на `feature/part-1-*` и `feature/part-2-*`, на текущей `feature/part-4-dashboard-sketch` их нет.
+`README.md` §2.1, §3, §8 ссылается на `docs/data_exploration.md`, `models/staging/_raw_events__eda.md` (исходно `docs/eda_report.md`, теперь doc-блок к `raw.events`), `docs/eda_tests.md`, `docs/assumptions.md`. Эти файлы лежат на `feature/part-1-*` и `feature/part-2-*`, на текущей `feature/part-4-dashboard-sketch` их нет.
 
 В шапке README есть warning-блок об этом, но всё равно остаётся вопрос стратегии слияния веток перед сдачей: (a) merge всех `feature/part-N-*` в `main` (ссылки рабочие), (b) cherry-pick только финальных артефактов в одну ветку, (c) оставить как есть и предупредить ревьюера. Рекомендую (a). Без слияния половина ссылок в README 404, для ревьюера это первое, что бросится в глаза.
 
@@ -287,3 +287,148 @@ group by 1, 2
 **Минимум перед сдачей:** P0 #1, #2, #3.
 
 **Максимум разумного:** + P1 #4, #5, #7 (~1 час), они закрывают тестовые gap'ы которые ревьюер с хорошим dbt-фоном заметит сразу.
+
+---
+
+# Round 2 — code review (post round-1)
+
+Свежий проход по `main` после слияния всех `feature/part-N-*` веток (PR #1–6), Round-1 фиксов (`var('max_day_number')`, hash-aggregate dedup, cold-rebuild script, query_comment, top-5 cleanup, unit-тестов trim, `5f08480` SQL header → YAML), сегодняшней миграции EDA в doc-блок к `raw.events` и refactor'а decisions/ + dashboard_sketch §1. README.md из ревью исключён per user.
+
+Закрытые Round 1 пункты не пере-литигируются — кроме одного фактического regress'а (см. ниже).
+
+## P0 — стоит закрыть до сдачи
+
+### R1. `assert_revenue_reconciliation.sql:4` — хардкод `30` вместо `var('max_day_number')`
+
+- [ ] **Open**
+
+`tests/assert_revenue_reconciliation.sql:4`: `where day_number = 30` — литерал на mart-side. Stg-side в этом же файле (строка 18) уже использует `{{ var('max_day_number') }}`. При поднятии `max_day_number` до 60 mart сравнит D30, stg — D60 window → false positive; при понижении до 14 — наоборот, mart уйдёт за пределы фактически собранного окна и вернёт `NULL` → silent test pass.
+
+Round 1 #12 декларировал, что в этом singular var подставлен («3 singular-теста: `assert_revenue_reconciliation`, `assert_paying_users_reconciliation`, `assert_n_purchases_reconciliation`»). Фактически — только в двух (см. `tests/assert_n_purchases_reconciliation.sql:14,18` и `tests/assert_paying_users_reconciliation.sql:9,18`), `assert_revenue_reconciliation` пропущен.
+
+**Что сделать:** заменить `where day_number = 30` на `where day_number = {{ var('max_day_number') }}`. Дополнительно зафиксировать в Round 1 #12 в этом файле, что регресс закрыт.
+
+## P1 — улучшения, которые повышают защищённость
+
+### R2. SQL-header в `int_user_install.sql:1-19` дублирует `_models.yml` EDGE CASES
+
+- [ ] **Open**
+
+Round 1 commit `5f08480` («move SQL header docstrings into _models.yml») должен был перенести SQL-header'ы в YAML. Файл `models/intermediate/int_user_install.sql:1-19` остался с многострочным header'ом, описывающим:
+
+- cohort_date = first observed event_date_utc
+- tie-break order (alphabetical event_name → bundle_sequence_id NULLS LAST → server_offset NULLS LAST)
+- `is_reinstall` semantics (NULL-safe `bool_or`)
+
+Все три пункта дублируются в `models/intermediate/_models.yml:18-22` (EDGE CASES блока `int_user_install`). Skill `dbt-docs` правило «YAML is source of truth, not SQL comments» не выполнено для этого файла. Аналогично, но в меньшем объёме — `models/marts/core/dim_users.sql:1-12` (header описывает star schema + p99 dynamic threshold rationale, частично пересекается с `_models.yml:19-22`).
+
+**Что сделать:** удалить header в `int_user_install.sql` или сократить до однострочного pointer'а («See `_models.yml` for full description»). В `dim_users.sql` оставить только то, что строго implementation rationale (например, «p99 hardcoded at SQL-level intentionally — see `is_outlier_events` description for ergonomics rationale»), остальное вынести в YAML.
+
+### R3. Mart `_models.yml` хардкодят D-window value (`0..30`, `[0, 30]`, `D30`)
+
+- [ ] **Open**
+
+Source of truth для D-window — `vars.max_day_number` в `dbt_project.yml:28`. `_utils/day_numbers._models.yml:13,25,31` корректно ссылается на var через ``var('max_day_number')`` в descriptions и `accepted_range`. Mart YAMLs нет:
+
+- `models/marts/reports/_models.yml:26` (`day_number ∈ [0, 30]` в EDGE CASES `mart_retention_overall`)
+- `models/marts/reports/_models.yml:43` («Range: 0..30 inclusive — see `_utils/day_numbers`»)
+- `models/marts/reports/_models.yml:94`, `:114` — то же для `mart_retention_by_platform`
+- `models/marts/reports/_models.yml:163`, `:182` — то же для `mart_revenue_overall`
+- `models/marts/reports/_models.yml:256`, `:276` — то же для `mart_revenue_by_platform`
+
+Если var изменится (продакт попросит D60), эти описания становятся ложью. Round 1 #13 закрыл аналогичный drift в `_utils/day_numbers`, но 7+ упоминаний в `marts/reports/_models.yml` не покрыл.
+
+**Что сделать:** заменить хардкоды на нейтральные phrasings — «Range: D-window от `vars.max_day_number` (default 30, см. `_utils/day_numbers`)» — либо проверить, поддерживает ли dbt Jinja-interpolation внутри description (technically `{{ var('max_day_number') }}` в YAML description компилируется при `dbt parse`, но не все BI-каталоги это рендерят).
+
+### R4. `docs/decisions/testing-strategy.md` ссылается на gitignored / branch-relative пути
+
+- [ ] **Open**
+
+`models/staging/_raw_events__eda.md` — корректно (committed). Но три ссылки в `docs/decisions/testing-strategy.md:8-11` проблемные:
+
+- `:8` `.claude/skills/using-dbt-for-analytics-engineering/references/writing-data-tests.md` — `.gitignore:30` исключает `.claude/`. Файл локальный к dev-окружению; для внешнего ревьюера 404.
+- `:9` `.claude/skills/adding-dbt-unit-test/SKILL.md` — то же.
+- `:10` `.claude/skills/data-quality-auditor/SKILL.md` — то же.
+- `:11` `git show feature/part-1-data-exploration:docs/eda_tests.md` — branch-relative reference. После удаления feature-веток (стандартная гигиена post-merge) ссылка ломается.
+
+Дополнительно: `:8` имеет markdown typo — двойной bullet `- - .claude/skills/...` (по факту визуально создаёт nested list).
+
+**Что сделать:** заменить `.claude/skills/...` ссылки на нейтральное упоминание методологии («Tier-фрейм описан во внутреннем dbt-AE skill команды») без gitignored-путей. `eda_tests.md`-pointer — либо включить ключевые инварианты в `models/staging/_raw_events__eda.md` (там сейчас Data quality issues §, см. lines 158-178), либо снять ссылку. Заодно убрать typo `- -`.
+
+### R5. `mart_retention_*.sql` имеют header'ы, `mart_revenue_*.sql` — нет (asymmetric cleanup)
+
+- [ ] **Open**
+
+`models/marts/reports/mart_retention_overall.sql:1-16` и `mart_retention_by_platform.sql:1-7` — header-комментарии с описанием template / densification / D0 invariant. `mart_revenue_overall.sql` и `mart_revenue_by_platform.sql` — header'ов нет, SQL начинается с `with`.
+
+Round 1 commit `5f08480` декларирует «move SQL header docstrings into _models.yml». Retention marts не покрыты этим cleanup'ом — либо forgotten, либо intentional (header содержит чисто implementation rationale: «D0 invariant asserted by `assert_d0_full_retention.sql`», «cohorts × day_numbers densification template»).
+
+**Что сделать:** определить convention. Если оставлять headers как «implementation rationale + pointers на singular-тесты» — добавить эквивалент в `mart_revenue_*.sql` (там тот же densification template + monotonic-singular pointer). Если убирать — снять в retention marts. Сейчас asymmetry создаёт впечатление unfinished cleanup.
+
+## P2 — nice-to-have
+
+### R6. `scripts/build_stg_batched.py` зеркалирует `stg_events.sql` SQL — drift risk
+
+- [ ] **Open**
+
+`scripts/build_stg_batched.py:39-95` (`INSERT_TEMPLATE`) — ручная копия типизированной проекции из `models/staging/stg_events.sql:68-101`. Inline-комментарий на line 40: «Kept in sync manually — when the model SQL changes, update this template».
+
+Сейчас (на 2026-04-27) дубликат идентичен. При добавлении новой типизированной колонки в staging-модель забыть обновить скрипт = silent drift между `make build` (≥16 GB) и `make build-small` (≤8 GB): `dbt build --exclude stg_events` пройдёт, но downstream-модели увидят таблицу без новой колонки → `Column not found` или хуже — silent NULL'ы если колонка nullable.
+
+Round 1 #9 закрыл pure-документационную проблему («cold-rebuild workaround вшит документально, не в коде»), а реализация скрипта создала новый риск drift'а — про него не написано.
+
+**Что сделать:** один из вариантов:
+- (a) Lightweight smoke-check в скрипте: `assert set(columns(main.stg_events)) == set(columns_from_dbt_compile())` после bootstrap insert'а. Падает явно при первом drift'е.
+- (b) `make test-build-small` target в Makefile, который запускает `build-small` + полный `dbt test` на CI weekly. Catches любой drift на следующем CI-цикле.
+- (c) Оставить inline-комментарий + добавить в `_raw_events__eda.md` или `decisions/architecture.md` запись «known drift point: `scripts/build_stg_batched.py` ↔ `stg_events.sql`».
+
+Рекомендую (a) — стоимость < 10 строк, fail-fast вместо silent.
+
+### R7. `meta.production_target_config` в YAML — inert string, не машинно-читаемый
+
+- [ ] **Open**
+
+`models/staging/_models.yml:28-34` (на `stg_events`):
+
+```yaml
+meta:
+  production_target_config: |
+    On BigQuery this becomes:
+      materialized: incremental
+      partition_by: event_date_utc
+      ...
+```
+
+Это многострочный строковый литерал в `meta:` — не парсится dbt'ом, не применяется автоматически, но и не отображается в `dbt docs` как описание (для description есть отдельный ключ). По skill convention `meta:` = «machine-readable attributes only». Прозовая инструкция по миграции корректнее живёт в `decisions/architecture.md §6 «Будущая миграция в BigQuery»` (где она уже есть в табличной форме).
+
+**Что сделать:** удалить `production_target_config` из `meta:` и оставить только в `decisions/architecture.md §6` как single source of truth. Если хочется машинно-читаемого hint'а для будущего BQ-builder'а — переименовать в `meta.bq_target` со структурированным dict (`{materialized: incremental, partition_by: event_date_utc, ...}`), а не строкой.
+
+## Регрессии Round 1
+
+### R-reg-1. Round 1 #12: `assert_revenue_reconciliation.sql` пропущен при substitution `var('max_day_number')`
+
+См. P0 R1. Round 1 #12 был помечен Fixed с явным указанием трёх singular-тестов. Фактически substitution применён к двум из трёх. Регресс зафиксировать после R1 fix'а — снимая `[x]` Round 1 #12 не нужно (бóльшая часть рефактора по-прежнему done), но стоит дописать в комментарии: «`assert_revenue_reconciliation.sql` синхронизирован отдельно в Round 2 R1».
+
+## Спорные точки для обсуждения
+
+### D1. Convention: SQL header vs `_models.yml` description — не зафиксирован
+
+`5f08480` решил конкретный кейс (long doc-headers в SQL → YAML), но не зафиксировал правило, когда header в SQL допустим. Сейчас в проекте 4 разных паттерна:
+
+- `stg_events.sql:1-22` — header = implementation rationale (DuckDB perf, dedup hash-aggregate, sentinel для NULLS LAST). Не пересекается с YAML.
+- `int_user_install.sql:1-19` — header = описание модели (дублирует YAML EDGE CASES). См. R2.
+- `dim_users.sql:1-12` — header = смесь (star schema rationale + p99 ergonomic). Частично пересекается с YAML.
+- `mart_retention_*.sql` — header = template description. См. R5.
+- `int_user_daily_*.sql`, `mart_revenue_*.sql`, `day_numbers.sql` — header'а нет.
+
+Предлагаемое правило: «Header в SQL допустим ТОЛЬКО для implementation rationale, которое не уместно в `description:` (perf, эмулируемые семантики DB, post-hook reasoning). Любая семантика модели — в YAML, в SQL не дублируется».
+
+**Решение:** утвердить convention или выбрать другую — сейчас asymmetry создаёт ложный сигнал «то ли cleanup незавершён, то ли есть скрытое правило».
+
+### D2. `freshness:` на статичном source — реально не декларировать, или сразу с `severity: warn`?
+
+`docs/decisions/testing-strategy.md §5` и `decisions/architecture.md §6` фиксируют решение: на статичном 2018-сэмпле `freshness` не декларируем, в проде вернётся через `loaded_at_field`. ОК, но в `_sources.yml` нет даже комментария-placeholder'а («This source is intentionally without freshness for the static sample — see `decisions/testing-strategy.md §5`»).
+
+Без такого комментария новый AE на проекте не поймёт, почему freshness отсутствует, и может либо добавить freshness наугад (ложный alert на static parquet), либо посчитать пропуск багом и завести issue.
+
+**Что сделать:** добавить однострочный комментарий в `models/staging/_sources.yml` под `loader: prepare_data_py`: `# freshness: deliberately omitted on static sample — see decisions/testing-strategy.md §5`.

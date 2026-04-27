@@ -1,16 +1,3 @@
-{#-
-    User dimension at user grain. One row per `user_pseudo_id`.
-
-    Clean star schema: every slowly-changing user attribute (cohort, install,
-    flags) lives here; `fct_user_daily` joins back via FK. `cohort_size`
-    invariants in tests use `dim_users` as the independent source of truth.
-
-    `is_outlier_events` uses a dynamic p99 over `events_total`. Hardcoding the
-    threshold (≈ 5541 per EDA) would be fragile to refresh; flagging a fraction
-    of rows is the right ergonomics for a "heavy users may dominate metrics"
-    signal.
--#}
-
 with base as (
     select * from {{ ref('int_user_install') }}
 ),

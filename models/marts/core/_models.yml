@@ -18,6 +18,7 @@ models:
 
       EDGE CASES:
         - `is_outlier_events` is a DYNAMIC flag (`events_total > p99` ≈ 5,541 in the sample, ~1% of users) — surfaced for filtering downstream, NOT auto-filtered here.
+        - Threshold is computed via `percentile_cont(0.99) within group (order by events_total)` rather than hardcoded. Hardcoding `> 5541` would be fragile to refresh — once data updates the absolute p99 shifts, but a dynamic recompute keeps the ~1% outlier share stable across runs.
         - `is_reinstall` is BOOL NOT NULL — `false` includes both explicit `previous_first_open_count = 0` and "no `first_open` event observed". Don't read `false` as "definitely not a reinstall" without context.
     meta:
       owner: analytics-eng

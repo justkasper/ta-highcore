@@ -6,19 +6,15 @@
 }}
 
 {#-
-    Materialization override (view → table) is local to DuckDB: every
-    downstream view re-scans the 5.7M-row source on each test run, which
-    pushed `dbt test` into OOM under default concurrency. Persisting once
-    turns subsequent scans into milliseconds. The BQ-target config and
-    user-facing semantics live in `_models.yml`.
+    Materialization override (view → table) is local to DuckDB: under
+    default test concurrency every downstream view re-scans the 5.7M-row
+    source and `dbt test` OOM'd. Persisting once collapses subsequent
+    scans to milliseconds.
 
-    Dedup uses a hash aggregate that emits only losing rowids
-    (`list(_src_rowid order by …)[2:]` after `having count(*) > 1`),
-    followed by an anti-join. `qualify row_number()` over the 5.7M-row
-    partition spilled past 8 GB on cold rebuild even on a thin key
-    projection. The aggregate has no global sort; per-group list-sort is
-    free because HAVING discards the ~99% groups of size 1, leaving only
-    a few thousand dupe groups, so the anti-join's build side is tiny.
+    Dedup tie-break uses an int64-max sentinel via `coalesce(...,
+    9223372036854775807)` instead of `NULLS LAST`: DuckDB's `list`
+    aggregate ORDER BY does not expose `NULLS LAST` inside a list
+    aggregate, so NULL-tolerant ordering needs an explicit sentinel.
 -#}
 
 with raw_events as (
@@ -27,9 +23,6 @@ with raw_events as (
 ),
 
 dedup_keys as (
-    -- thin projection so the aggregate scan is column-pruned at the parquet/
-    -- DuckDB reader and never holds the fat structs (event_params,
-    -- user_properties, device, geo, …) in memory.
     select
         _src_rowid,
         user_pseudo_id,
@@ -41,13 +34,6 @@ dedup_keys as (
 ),
 
 losing_dupe_rowids as (
-    -- For each (user_pseudo_id, event_timestamp, event_name) group with
-    -- >1 rows, list rowids ordered by the same tie-break the original
-    -- window used (event_bundle_sequence_id NULLS LAST, then
-    -- event_server_timestamp_offset NULLS LAST — emulated via int64-max
-    -- sentinel because struct/list ORDER BY does not expose NULLS LAST
-    -- inside a list aggregate). Slice [2:] drops the canonical winner
-    -- and emits only the losers via UNNEST.
     select unnest(
         list(_src_rowid order by
             coalesce(event_bundle_sequence_id, 9223372036854775807),
@@ -80,7 +66,6 @@ typed as (
         event_bundle_sequence_id,
         event_server_timestamp_offset,
 
-        -- event_params extractions: only keys downstream models actually use
         (list_filter(event_params, x -> x.key = 'engagement_time_msec')[1]).value.int_value
             as engagement_time_msec,
         (list_filter(event_params, x -> x.key = 'firebase_screen_class')[1]).value.string_value
@@ -90,7 +75,6 @@ typed as (
         (list_filter(event_params, x -> x.key = 'ga_session_id')[1]).value.int_value
             as ga_session_id,
 
-        -- struct → top-level
         device.category as device_category,
         nullif(device.operating_system, 'NaN') as device_os,
         geo.country as country,

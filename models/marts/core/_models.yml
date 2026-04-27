@@ -145,9 +145,3 @@ models:
       - dbt_utils.expression_is_true:
           expression: "paying_flag = (gross_revenue > 0)"
           name: fct_user_daily_paying_flag_consistent_with_gross_revenue
-      # Intentionally NOT testing `(n_purchases > 0) = paying_flag`:
-      # the source has 3 in_app_purchase events with event_value_in_usd = NULL,
-      # which legitimately count toward n_purchases (count) but not toward
-      # gross_revenue (NULLs ignored by sum). paying_flag tracks actual
-      # money — that's the invariant we care about. (Documented in
-      # description EDGE CASES.)

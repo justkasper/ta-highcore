@@ -1,8 +1,4 @@
--- Denormalized cohort_date in fct_user_daily must match dim_users.cohort_date
--- for the same user. Generic tests on fct.cohort_date only see the fact
--- table's own column; if the join in fct_user_daily.sql ever pulls a wrong
--- cohort_date, none of the existing tests catch it. This singular closes
--- that gap.
+-- See `tests/_tests.yml` for full docs.
 
 select
     fct.user_pseudo_id,

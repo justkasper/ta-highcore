@@ -1,12 +1,14 @@
-# Data exploration — `raw.events`
+{% docs raw_events__eda %}
 
-Comprehensive findings from Part 1 of the assignment. Covers source shape, per-column inventory, identifier model, anomalies, monetization signal, and the staging / modeling implications they drive.
+## Data exploration — `raw.events`
 
-All numbers were produced against the local DuckDB warehouse (`data/warehouse.duckdb`) populated by `scripts/prepare_data.py`, following the `using-dbt-for-analytics-engineering / discovering-data` checklist.
+Source-shape findings for `raw.events`: per-column inventory, identifier model, anomalies, monetization signal, and the staging / modeling decisions they drove.
+
+Numbers measured against the local DuckDB warehouse (`data/warehouse.duckdb`) populated by `scripts/prepare_data.py`.
 
 ---
 
-## TL;DR
+### TL;DR
 
 - **5.7 M events / 15,175 users / 114 days** (2018-06-12 → 2018-10-03), Firebase mobile analytics export from a F2P puzzle game (Flood-It!) shipped as **two app builds** (`com.labpixies.flood` on Android, `com.google.flood2` on iOS).
 - **This is a sampled dataset, not a full event stream.** Every `event_date` contains *exactly* 50,000 rows (114 × 50,000 = 5,700,000). Cohort sizes and retention are biased low and must be read as relative.
@@ -16,11 +18,11 @@ All numbers were produced against the local DuckDB warehouse (`data/warehouse.du
   - `user_first_touch_timestamp` disagrees with the user's first observed event for **97 %** of users.
   - `first_open` is present for only **28 %** of users.
 - Monetization signal is **very thin**: 24 paying users / 27 events / $24.89 total. Useful for shape, not for absolute figures.
-- Pick `user_pseudo_id` as the cohort key, derive `cohort_date` from the *first observed `event_date`* per user.
+- Cohort key is `user_pseudo_id`; `cohort_date` is derived from the *first observed `event_date`* per user.
 
 ---
 
-## Source and grain
+### Source and grain
 
 - **Row count**: 5,700,000
 - **Distinct `user_pseudo_id`**: 15,175
@@ -29,7 +31,7 @@ All numbers were produced against the local DuckDB warehouse (`data/warehouse.du
 - **Grain**: one row per emitted Firebase event. There is no natural single-column primary key. The closest near-unique tuple is `(user_pseudo_id, event_timestamp, event_name)` — 207 duplicates exist (≈ 0.004 %).
 - **Sampling**: every `event_date` has **exactly 50,000 rows** (114 days × 50,000 = 5,700,000). This is the Firebase public BigQuery sample (`firebase-public-project.analytics_153293282`), not a complete event stream. Cohort sizes and retention will be biased low and must be read as relative, not absolute.
 
-## Volume and shape
+### Volume and shape
 
 | Metric | Value |
 |---|---|
@@ -43,7 +45,7 @@ All numbers were produced against the local DuckDB warehouse (`data/warehouse.du
 
 The hard 50,000-rows-per-day cap is the most important property of this dataset to internalize before drawing any conclusions.
 
-## Column inventory
+### Column inventory
 
 | Column | Type | Coverage | Notes |
 |---|---|---|---|
@@ -68,7 +70,7 @@ The hard 50,000-rows-per-day cap is the most important property of this dataset 
 | `platform` | VARCHAR | 100 % | `ANDROID` (3.03 M rows / 7,410 users), `IOS` (2.67 M / 7,765 users). |
 | `event_dimensions` | STRUCT | 100 % NULL | Empty in this dataset. Drop. |
 
-## Event vocabulary
+### Event vocabulary
 
 37 distinct `event_name` values. Top by volume:
 
@@ -92,7 +94,7 @@ Useful for the product brief:
 - `user_engagement` carries `engagement_time_msec` and is the right field for "active time per user-day".
 - `in_app_purchase` is the only event that ever carries `event_value_in_usd > 0`.
 
-## `event_params` keys
+### `event_params` keys
 
 Drives the staging extracts: pick the right `*_value` field per key.
 
@@ -113,7 +115,7 @@ Drives the staging extracts: pick the right `*_value` field per key.
 
 `engagement_time_msec` is well-behaved: 0 negatives, p50 = 3.6 s, p99 = 214 s, max 87 min.
 
-## `user_properties` keys
+### `user_properties` keys
 
 25 distinct keys. Same struct shape as `event_params` (`{key, value{string|int|double|float|set_timestamp_micros}}`); every key also carries `set_timestamp_micros` (the time the property was last set on the user).
 
@@ -135,7 +137,7 @@ Drives the staging extracts: pick the right `*_value` field per key.
 
 `first_open_time` covers 99.997 % of events (every event except 156). The `_ltv_*` family is the per-currency raw form of cumulative LTV; we use the column-level `user_ltv.revenue` (always `USD`) and event-level `event_value_in_usd` for monetization rather than parsing these keys.
 
-## Identifier model
+### Identifier model
 
 `user_pseudo_id` is the only stable identity here. It is **never null or empty**, and **no user spans both platforms** (each pseudo id is single-platform). It is safe to use as the cohort key with no further cleaning.
 
@@ -148,15 +150,15 @@ The other identity fields are unhelpful or actively misleading:
   - 3,975 users (26 %) have `uft` *after* the user's first observed event — a data quality artefact; the value gets re-stamped later in the user's lifecycle by some events (`firebase_campaign` is a likely culprit).
 - `first_open` event — present for only **4,319 / 15,175 users (28 %)**. Of those 4,319, 161 had `previous_first_open_count > 0` (re-installs). Cannot anchor the cohort universally on this event.
 
-**Recommended cohort anchor**: `cohort_date = min(event_date) per user_pseudo_id`. It is the only definition that covers 100 % of users and is internally consistent with the sample. The trade-off (and Part 2 assumption to log) is that left-censored users — those whose true install predates 2018-06-12 — will appear in their first sample-window day's cohort and inflate that bucket; that bias is most visible on 2018-06-12 itself.
+**Cohort anchor**: `cohort_date = min(event_date) per user_pseudo_id`. It is the only definition that covers 100 % of users and is internally consistent with the sample. The trade-off (and assumption to log) is that left-censored users — those whose true install predates 2018-06-12 — will appear in their first sample-window day's cohort and inflate that bucket; that bias is most visible on 2018-06-12 itself.
 
-## Timestamps and date semantics
+### Timestamps and date semantics
 
-`event_date` is a `VARCHAR` in `YYYYMMDD` format in the **property's local time zone**; `event_timestamp` is microseconds since epoch in **UTC**. The two disagree on **34 % of rows** (1,935,518). Pick one anchor and stick to it across the project. Recommendation: derive both `event_ts_utc = make_timestamp(event_timestamp)` and `event_date_utc = event_ts_utc::date` in staging, and use `event_date_utc` for cohort math; preserve the source `event_date` only for source-comparison checks.
+`event_date` is a `VARCHAR` in `YYYYMMDD` format in the **property's local time zone**; `event_timestamp` is microseconds since epoch in **UTC**. The two disagree on **34 % of rows** (1,935,518). The project standardizes on UTC: staging derives `event_ts_utc = make_timestamp(event_timestamp)` and `event_date_utc = event_ts_utc::date`, and downstream models cohort on `event_date_utc`. The source `event_date` is preserved only for source-reconciliation checks.
 
 `event_previous_timestamp` is null on 3 % of rows and "in the future" (≥ current) on 2,994 rows. Not used downstream.
 
-## Data quality issues
+### Data quality issues
 
 At-a-glance:
 
@@ -179,12 +181,12 @@ At-a-glance:
 Detail on the entries that need more than a one-liner:
 
 1. **Per-day sampling cap (50,000 events / day, exact)** — not a bug, a sampling artefact. Every cohort metric must be qualified as "within sample". The first sample day (2018-06-12) shows 449 "new" users not because that's the install rate, but because everyone present that day is "new" by construction; left-censored users land here.
-2. **TZ skew** — `event_date` is property-local; `event_timestamp` is UTC. Pick one anchor for cohorting and stick to it. Reserve the source `event_date` for direct comparisons against the source.
+2. **TZ skew** — `event_date` is property-local; `event_timestamp` is UTC. The project picks UTC as the cohort anchor. The source `event_date` is reserved for direct comparisons against the source.
 5. **`uft` 97 % mismatch breakdown** — 71 % of users (`uft` before window) are pre-existing; 26 % (`uft` after first observed event) are a data quality artefact where `uft` is re-stamped later in the user's lifecycle. Don't use `uft` as the cohort anchor.
 6. **`first_open` partial coverage**: only 4,319 / 15,175 users emit it. Of those, 161 are re-installs (`previous_first_open_count > 0`). Cannot anchor universally on `first_open`.
 7. **Duplicates**: 207 rows share `(user_pseudo_id, event_timestamp, event_name)` — a tiny share but enough to break a `unique` test. Dedup once in staging via `qualify row_number() over (partition by user_pseudo_id, event_timestamp, event_name order by event_bundle_sequence_id) = 1`.
 
-## Monetization
+### Monetization
 
 Two related but inconsistent revenue signals:
 
@@ -196,35 +198,37 @@ Two related but inconsistent revenue signals:
 
 The 24 vs 146 gap is consistent: 122 users carry an `_ltv_*` property but never had a purchase event in the sample window — their purchase happened *before* 2018-06-12 and only the LTV memory survives.
 
-For the cohort retention/monetization marts: use `event_value_in_usd` for *new* revenue in the sample window (the only thing we can attribute to the cohort), and call out the LTV gap as a known leakage.
+For the cohort retention/monetization marts: `event_value_in_usd` is the only signal we can attribute to *new* revenue in the sample window, and the LTV gap is called out as known leakage.
 
-## Relationships
+### Relationships
 
 Single-source dataset; no foreign keys to validate. The only "joins" of interest are unnesting the `event_params` and `user_properties` lists into wide columns at the staging layer.
 
-## Recommended staging transformations
+### Staging transformations applied
 
-These follow directly from the findings above and inform Part 3 (the `models/staging/` layer):
+The decisions below follow directly from the findings above and are now implemented in `stg_events`:
 
 1. Cast `event_date` to `DATE` via `strptime(event_date, '%Y%m%d')::date`.
 2. Derive `event_ts_utc = make_timestamp(event_timestamp)` and `event_date_utc = event_ts_utc::date`. Use `event_date_utc` as the cohort-math anchor; keep raw `event_date` only for source-comparison checks.
 3. Drop `user_id` (always null), `event_dimensions` (always null), `stream_id` (redundant with `platform`).
 4. Extract typed columns from `event_params` for the params actually used: `engagement_time_msec` (int), `firebase_screen_class` (string), and `level` / `level_name` / `score` / `value` only if a gameplay mart is built. For mixed-type keys (e.g. `level`), coalesce `int_value` and `double_value`.
 5. Promote struct fields to top-level columns: `geo.country`, `device.category`, `device.operating_system`, `device.language`, `app_info.id`, `app_info.version`, `traffic_source.name`, `traffic_source.medium`, `traffic_source.source`.
-6. Build a `stg_users` view: per `user_pseudo_id`, derive `cohort_date` from the first observed `event_date_utc` (not `user_first_touch_timestamp`, which lies for 97 % of users). Carry `first_event_name`, install platform, install country, install traffic source.
-7. Build a `stg_purchases` view filtered on `event_value_in_usd > 0` (the canonical signal — currently 27 events). Document that monetization signal is sparse.
+6. Per-user roll-up (`stg_users`): `cohort_date` derived from the first observed `event_date_utc` (not `user_first_touch_timestamp`, which lies for 97 % of users). Carries `first_event_name`, install platform, install country, install traffic source.
+7. Purchase isolation (`stg_purchases`): filtered on `event_value_in_usd > 0` (the canonical signal — currently 27 events). Sparse monetization signal documented in the mart.
 8. Deduplicate on `(user_pseudo_id, event_timestamp, event_name)` (207 rows / 0.004 %) so `unique` tests on that grain pass.
 
-## Implications for modeling
+### Modeling decisions
 
-These choices flow from the findings above and feed Parts 2–4:
+These flow from the findings above and shape the intermediate / mart layer:
 
-1. **Identity**: `user_pseudo_id` only; drop `user_id`.
-2. **Cohort anchor**: first observed `event_date_utc` per `user_pseudo_id`. Document that left-censored users will inflate the first window day's cohort.
+1. **Identity**: `user_pseudo_id` only; `user_id` dropped.
+2. **Cohort anchor**: first observed `event_date_utc` per `user_pseudo_id`. Documented assumption: left-censored users inflate the first window day's cohort.
 3. **Activity definition**: a user is "active on day N" if they emit *any* event on `cohort_date + N`. Day 0 is the cohort day itself. Retention is binary by user-day.
-4. **Sessions**: skip session-level metrics, or proxy with `session_start` events. Do not depend on `ga_session_id`.
+4. **Sessions**: skipped at the metric level, or proxied with `session_start` events. `ga_session_id` not used.
 5. **Engagement time**: sum `engagement_time_msec` from `user_engagement` events per user-day.
-6. **Revenue**: use `event_value_in_usd` from `in_app_purchase` events. Surface the sparsity in mart docs.
-7. **Re-installs**: ignore for now; flag `previous_first_open_count > 0` in `dim_users` so a future analysis can exclude them.
-8. **Slices to expose**: `platform` (clean 2-way), `geo.country` (top-N + Other), `app_info.id` (Android vs iOS bundles), `traffic_source.medium` (direct / organic / cpc / other). Do not expose paid-campaign drilldowns — too sparse.
-9. **Sample disclaimer**: every dashboard page will need a "this is a 50k-events/day sample" footnote. Otherwise readers will misinterpret cohort sizes.
+6. **Revenue**: `event_value_in_usd` from `in_app_purchase` events. Sparsity surfaced in mart docs.
+7. **Re-installs**: ignored for now; `previous_first_open_count > 0` flagged in `dim_users` for future exclusion.
+8. **Slices exposed**: `platform` (clean 2-way), `geo.country` (top-N + Other), `app_info.id` (Android vs iOS bundles), `traffic_source.medium` (direct / organic / cpc / other). Paid-campaign drilldowns are not exposed — too sparse.
+9. **Sample disclaimer**: every dashboard page carries a "this is a 50k-events/day sample" footnote so cohort sizes aren't misread as absolute.
+
+{% enddocs %}

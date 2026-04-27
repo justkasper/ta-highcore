@@ -45,6 +45,10 @@ sources:
             - 207 source duplicates on the dedup key — handled in `stg_events`, do NOT add a uniqueness test here.
             - 37 distinct `event_name` values in the sample.
             - `user_id` is 100% NULL; `event_dimensions` is 100% NULL; `stream_id` is 1:1 with `platform`. Dropped from `stg_events`.
+
+          ---
+
+          {{ doc('raw_events__eda') }}
         columns:
           - name: user_pseudo_id
             description: PK (after dedup). Stable, 100%-coverage user identifier — Firebase-assigned pseudonymous device/install ID. Source contract — must never be NULL.

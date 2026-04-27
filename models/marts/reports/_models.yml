@@ -23,11 +23,11 @@ models:
 
       GRAIN: One row per (cohort_date, day_number).
       PK: (cohort_date, day_number)
-      FK: cohort_date → dim_users.cohort_date (loose — every cohort_date is grouped from dim_users); day_number ∈ [0, var('max_day_number')] inclusive.
+      FK: cohort_date → dim_users.cohort_date (loose — every cohort_date is grouped from dim_users); day_number ∈ [0, `var('max_day_number')`] inclusive.
       DOWNSTREAM: BI dashboard only.
 
       EDGE CASES:
-        - Densified via `_utils/day_numbers` cross join — every (cohort, day_number ∈ [0..var('max_day_number')]) pair has a row even when no users were active. `retained_users = 0`, `retention_pct = 0` in those cells.
+        - Densified via `_utils/day_numbers` cross join — every (cohort, day_number ∈ [0..`var('max_day_number')`]) pair has a row even when no users were active. `retained_users = 0`, `retention_pct = 0` in those cells.
         - On D0, `retained_users = cohort_size` by construction (the user is active on their own cohort_date). Asserted by `tests/assert_d0_full_retention.sql`.
         - `not_null` is intentionally NOT tested on `cohort_size` / `retained_users` / `retention_pct` — non-NULL by construction (count outputs, coalesce-wrapped LEFT JOIN). Tested only via business invariants (`> 0`, `between 0 and 1`).
         - `retention_pct_trailing_4w_avg` is NULL for the first cohort at each `day_number` (no preceding history), and accumulates to a stable 28-cohort window thereafter. NULL is intentional and renders as "no baseline yet" on the dashboard.
@@ -91,7 +91,7 @@ models:
 
       GRAIN: One row per (cohort_date, install_platform, day_number).
       PK: (cohort_date, install_platform, day_number)
-      FK: cohort_date / install_platform sourced from `dim_users`; day_number ∈ [0, var('max_day_number')] inclusive.
+      FK: cohort_date / install_platform sourced from `dim_users`; day_number ∈ [0, `var('max_day_number')`] inclusive.
       DOWNSTREAM: BI dashboard only.
 
       EDGE CASES:
@@ -111,7 +111,7 @@ models:
         data_tests:
           - not_null
       - name: day_number
-        description: Days since `cohort_date`. Range 0..var('max_day_number') inclusive.
+        description: Days since `cohort_date`. Range 0..`var('max_day_number')` inclusive.
         data_tests: [not_null]
       - name: cohort_size
         description: 'Number of users in this (cohort_date, install_platform) cell. `count(*)` grouped by both — non-NULL by construction. Tested as `> 0` directly (symmetric with `mart_retention_overall`).'
@@ -160,7 +160,7 @@ models:
 
       GRAIN: One row per (cohort_date, day_number).
       PK: (cohort_date, day_number)
-      FK: cohort_date sourced from `dim_users`; day_number ∈ [0, var('max_day_number')] inclusive.
+      FK: cohort_date sourced from `dim_users`; day_number ∈ [0, `var('max_day_number')`] inclusive.
       DOWNSTREAM: BI dashboard only.
 
       EDGE CASES:
@@ -179,7 +179,7 @@ models:
         description: Cohort anchor — UTC date of users' first observed event.
         data_tests: [not_null]
       - name: day_number
-        description: Days since `cohort_date`. Range 0..var('max_day_number') inclusive.
+        description: Days since `cohort_date`. Range 0..`var('max_day_number')` inclusive.
         data_tests: [not_null]
       - name: cohort_size
         description: 'Number of users in this cohort — `count(*) GROUP BY cohort_date` over `dim_users`. Denominator for `cum_arpu` and `paying_share`; same value as `mart_retention_overall.cohort_size` for the same `cohort_date`. Non-NULL by construction; constant within a (cohort_date) cell across all `day_number` rows.'
@@ -253,7 +253,7 @@ models:
 
       GRAIN: One row per (cohort_date, install_platform, day_number).
       PK: (cohort_date, install_platform, day_number)
-      FK: cohort_date / install_platform sourced from `dim_users`; day_number ∈ [0, var('max_day_number')] inclusive.
+      FK: cohort_date / install_platform sourced from `dim_users`; day_number ∈ [0, `var('max_day_number')`] inclusive.
       DOWNSTREAM: BI dashboard only.
 
       EDGE CASES:
@@ -273,7 +273,7 @@ models:
         data_tests:
           - not_null
       - name: day_number
-        description: Days since `cohort_date`. Range 0..var('max_day_number') inclusive.
+        description: Days since `cohort_date`. Range 0..`var('max_day_number')` inclusive.
         data_tests: [not_null]
       - name: cohort_size
         description: 'Number of users in this (cohort_date, install_platform) cell.'

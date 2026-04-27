@@ -75,7 +75,7 @@ typed as (
         user_pseudo_id,
         platform,
 
-        event_value_in_usd,
+        event_value_in_usd::numeric(18, 4) as event_value_in_usd,
         event_previous_timestamp,
         event_bundle_sequence_id,
         event_server_timestamp_offset,
@@ -91,12 +91,12 @@ typed as (
             as ga_session_id,
 
         -- struct → top-level
-        device.category                              as device_category,
-        nullif(device.operating_system, 'NaN')       as device_os,
-        geo.country                                  as country,
-        app_info.id                                  as app_id,
-        traffic_source.medium                        as traffic_medium,
-        traffic_source.name                          as traffic_source_name
+        device.category as device_category,
+        nullif(device.operating_system, 'NaN') as device_os,
+        geo.country as country,
+        app_info.id as app_id,
+        traffic_source.medium as traffic_medium,
+        traffic_source.name as traffic_source_name
 
     from deduped
 )

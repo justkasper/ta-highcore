@@ -29,6 +29,35 @@ unit_tests:
         - {cohort_date: '2018-06-12', day_number: 1, cohort_size: 2, gross_revenue: 0, paying_users: 0, cum_revenue: 0, cum_paying_users: 0, cum_arpu: 0, cum_arppu: null, paying_share: 0}
         - {cohort_date: '2018-06-12', day_number: 2, cohort_size: 2, gross_revenue: 0, paying_users: 0, cum_revenue: 0, cum_paying_users: 0, cum_arpu: 0, cum_arppu: null, paying_share: 0}
 
+  - name: mart_revenue_overall_dry_cohort_arppu_is_null_with_active_other_cohort
+    description: >
+      Realistic variant of `mart_revenue_overall_dry_cohort_arppu_is_null`:
+      fct is non-empty (cohort `2018-06-13` has activity and revenue),
+      but the target cohort `2018-06-12` has zero payers across the
+      window. Pins that cum_arppu = NULL is robust to the densification
+      path where the cohort-of-interest has rows in `dim_users` and
+      `day_numbers` but no rows from the LEFT JOIN onto `fct_user_daily`.
+    model: mart_revenue_overall
+    given:
+      - input: ref('dim_users')
+        rows:
+          - {user_pseudo_id: 'U1', cohort_date: '2018-06-12'}
+          - {user_pseudo_id: 'U2', cohort_date: '2018-06-12'}
+          - {user_pseudo_id: 'P1', cohort_date: '2018-06-13'}
+      - input: ref('fct_user_daily')
+        rows:
+          - {user_pseudo_id: 'P1', cohort_date: '2018-06-13', activity_date: '2018-06-13', day_number: 0, gross_revenue: 5.00, paying_flag: true}
+      - input: ref('day_numbers')
+        rows:
+          - {day_number: 0}
+          - {day_number: 1}
+    expect:
+      rows:
+        - {cohort_date: '2018-06-12', day_number: 0, cohort_size: 2, gross_revenue: 0,    paying_users: 0, cum_revenue: 0,    cum_paying_users: 0, cum_arpu: 0,    cum_arppu: null, paying_share: 0}
+        - {cohort_date: '2018-06-12', day_number: 1, cohort_size: 2, gross_revenue: 0,    paying_users: 0, cum_revenue: 0,    cum_paying_users: 0, cum_arpu: 0,    cum_arppu: null, paying_share: 0}
+        - {cohort_date: '2018-06-13', day_number: 0, cohort_size: 1, gross_revenue: 5.00, paying_users: 1, cum_revenue: 5.00, cum_paying_users: 1, cum_arpu: 5.00, cum_arppu: 5.00, paying_share: 1.0}
+        - {cohort_date: '2018-06-13', day_number: 1, cohort_size: 1, gross_revenue: 0,    paying_users: 0, cum_revenue: 5.00, cum_paying_users: 1, cum_arpu: 5.00, cum_arppu: 5.00, paying_share: 1.0}
+
   - name: mart_revenue_overall_cumulative_correctness
     description: >
       Two distinct payers on D0 ($0.99) and D2 ($1.50) in a 10-user

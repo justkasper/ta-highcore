@@ -25,13 +25,6 @@ models:
         - `event_value_in_usd` is non-NULL only when `event_name = 'in_app_purchase'` — asserted by a singular test.
     meta:
       owner: analytics-eng
-      production_target_config: |
-        On BigQuery this becomes:
-          materialized: incremental
-          partition_by: event_date_utc
-          unique_key: [user_pseudo_id, event_timestamp, event_name]
-          incremental_strategy: merge
-        SQL stays the same; only configs change.
     columns:
       - name: user_pseudo_id
         description: Stable, 100%-coverage user identifier (Firebase pseudonymous install/device ID). Part of the PK; primary key for `dim_users`.

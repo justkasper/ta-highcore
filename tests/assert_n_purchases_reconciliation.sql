@@ -1,4 +1,3 @@
--- See `tests/_tests.yml` for full docs.
 
 with mart_side as (
     select sum(fct.n_purchases) as total_n_purchases

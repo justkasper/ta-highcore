@@ -1,4 +1,3 @@
-{#- See `macros/_macros.yml` for full docs. -#}
 {% macro revenue_metrics_columns(partition_by) -%}
     {{ cum_sum('gross_revenue', partition_by) }}::numeric(18, 4) as cum_revenue,
     {{ cum_sum('paying_users', partition_by) }} as cum_paying_users,

@@ -1,4 +1,3 @@
--- See `tests/_tests.yml` for full docs.
 
 with mart_payers as (
     select count(distinct dim.user_pseudo_id) as payer_count

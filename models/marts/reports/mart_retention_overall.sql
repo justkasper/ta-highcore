@@ -1,20 +1,3 @@
-{#-
-    Cohort retention, overall (no slice).
-    Grain: (cohort_date × day_number).
-
-    Template over the sparse `fct_user_daily`:
-    1) `cohorts` — cohort size per cohort_date, computed from dim_users.
-    2) `grid` — cohorts × day_numbers densification. Guarantees a row in the
-       mart for every (cohort_date, day_number) pair, even if no one reached
-       that cell (retained_users = 0, retention_pct = 0).
-    3) `retained` — count(distinct user_pseudo_id) per (cohort_date, day_number)
-       over the sparse fact.
-
-    On D0, retained == cohort_size by construction (the user is active on
-    their own cohort day). That invariant is asserted by the singular test
-    `tests/assert_d0_full_retention.sql`.
--#}
-
 with cohorts as (
     select
         cohort_date,

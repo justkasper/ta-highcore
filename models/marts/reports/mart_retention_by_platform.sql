@@ -1,11 +1,3 @@
-{#-
-    Retention with install_platform slice. Same shape as
-    `mart_retention_overall` plus a join to `dim_users` for `install_platform`.
-
-    The dashboard can filter by `install_platform` or compare iOS vs Android
-    side by side — no COUNT DISTINCT, no JOIN at the BI layer.
--#}
-
 with users as (
     select user_pseudo_id, cohort_date, install_platform from {{ ref('dim_users') }}
 ),

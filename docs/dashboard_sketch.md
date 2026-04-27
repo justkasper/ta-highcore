@@ -76,13 +76,13 @@ Cohort Health — дашборд про retention и монетизацию но
 
 | # | Блок | Mart | Что показывает | Расчёт поверх mart'а |
 |---|---|---|---|---|
-| 3.1 | KPI: ARPU@D7, PAY%@D7, D1, D3, D7 | `mart_retention_overall`, `mart_revenue_overall` | значение на последней полной когорте + дельта vs trailing 4w | для значения — `WHERE cohort_date = max_full(cohort_date)`; для дельты по retention/ARPU — прямой `SELECT` `*_trailing_4w_avg`; по PAY% — тривиальный `AVG(paying_share)` на BI-стороне (нет mart-колонки) |
+| 3.1 | KPI: ARPU@D7, PAY%@D7, D1, D3, D7 | `mart_retention_overall`, `mart_revenue_overall` | значение на последней полной когорте + дельта vs trailing 4w | для значения — `WHERE cohort_date = max_full(cohort_date)`; для дельты — прямой `SELECT` `*_trailing_4w_avg` по всем трём метрикам (retention/ARPU/PAY%) |
 | 3.2 | Cohort triangle | `mart_retention_overall` | retention в матрице (`cohort_date × day_number`), цвет = `retention_pct` | прямой `SELECT`; Y-сортировка `cohort_date DESC` (последняя сверху) |
 | 3.3 | Current vs trailing 4w avg (2-panel) | `mart_retention_overall`, `mart_revenue_overall` | левая панель — retention vs `day_number` (selected + baseline); правая — cum_arpu vs `day_number` (selected + baseline) | прямой `SELECT` `retention_pct_trailing_4w_avg` и `cum_arpu_trailing_4w_avg` (колонки mart'ов) |
 | 3.4 | Cohort comparison (3 sub-charts) | `mart_revenue_overall`, `mart_retention_overall` | D7 trend (weekly), cum_arpu × cohort, paying_share × cohort — без платформенного среза | прямой `SELECT`, серия = `cohort_date` (для D7-trend — weekly weighted mean) |
 | 3.5 | Platform breakdown (3 sub-charts) | `mart_*_by_platform` | те же три метрики, серия = `install_platform`; порядок панелей идентичен 3.4 (retention → cum_arpu → paying_share) | прямой `SELECT`, серия = `install_platform`; D7-trend — weekly weighted mean |
 
-**Headless-BI** — все блоки прямой `SELECT` поверх mart'ов. Trailing-4w baseline для retention и cum_arpu берётся из mart-колонок `retention_pct_trailing_4w_avg` / `cum_arpu_trailing_4w_avg` (макрос `cohort_trailing_avg`). Для PAY%/paying_share trailing-avg-колонки нет (отдельный extension-point) — дельта в KPI 3.1 считается тривиальным `AVG()` поверх 28-дневного диапазона на BI-стороне; это единственный оставшийся не-mart-агрегат на дашборде.
+**Headless-BI** — все блоки прямой `SELECT` поверх mart'ов. Trailing-4w baseline для всех трёх метрик берётся из mart-колонок `retention_pct_trailing_4w_avg` / `cum_arpu_trailing_4w_avg` / `paying_share_trailing_4w_avg` (макрос `trailing_avg`). На дашборде не осталось window-агрегатов на BI-стороне — каждое значение и каждая дельта читается одним `SELECT col FROM mart WHERE filter`.
 
 ### 3.1 Header KPIs
 
@@ -166,7 +166,6 @@ Cohort Health — дашборд про retention и монетизацию но
 | `mart_*_by_country` | Шаблон копипастится с `*_by_platform` (~10 мин), но: US = 54% юзеров, остальные страны имеют когорты по 5–20 человек — серии будут шумить. Не блокер, но low-value на этом сэмпле. | Когда продакт явно попросит country slice или объём данных вырастет. |
 | `mart_*_by_traffic` | Из `assumptions.md` §14: paid < 1% трафика, 24 платящих на весь сэмпл — slice по `traffic_medium` даёт пустые ячейки и ложные тренды. | На реальных production-данных с осмысленным paid-traffic. |
 | Engagement-метрики (sessions / engagement_sec) | `fct_user_daily.engagement_sec` есть, но в reports-mart'ы не выведен. Не озвучен в брифе продакта. | Когда понадобится «качество сессии» / churn-предикторы. |
-| `paying_share_trailing_4w_avg` колонка в mart'е | Для retention и cum_arpu trailing-4w-avg уже есть mart-колонки (макрос `cohort_trailing_avg`); для paying_share — нет. Дельта в KPI 3.1 пока считается тривиальным `AVG()` на BI-стороне. | Если KPI-плашка вырастет / появится paying-share-фокусированный режим. |
 | A/B-разрезы (`firebase_exp_*`) | Не озвучены в брифе; в этом сэмпле всё равно нет настроенных экспериментов. | На проде с реальными A/B. |
 | Tabbed layout (Retention / Monetization / Platform) | Для 5 блоков и 4 mart'ов overkill; добавит навигационный шум. | Когда число блоков перевалит за ~10 или появятся 3+ среза. |
 | `last cohort` toggle (last cohort vs weighted avg по периоду) | Default = last cohort, как просил продакт. Toggle не делал, чтобы не усложнять self-serve. | Если в ревью прилетит запрос «дай мне period-weighted-вью». |

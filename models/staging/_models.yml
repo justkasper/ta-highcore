@@ -1,0 +1,111 @@
+version: 2
+
+models:
+  - name: stg_events
+    description: |
+      ROLE: Typed and normalized 1:1 view over `raw.events`. No aggregation, no
+      business filters — every row in the source survives unless it was a duplicate.
+      USE WHEN: Any model that needs UTC-typed Firebase events with the commonly-used
+      nested keys flattened to top-level columns.
+      DON'T USE FOR: Raw nested struct exploration (use `raw.events`); user- or
+      day-grain aggregates (use `int_user_*` or `fct_user_daily`).
+
+      GRAIN: One row per (user_pseudo_id, event_timestamp, event_name) — deduplicated.
+      PK: (user_pseudo_id, event_timestamp, event_name)
+      FK: user_pseudo_id → dim_users.user_pseudo_id (asserted on `dim_users`).
+      DOWNSTREAM: int_user_install, int_user_daily_activity, int_user_daily_revenue.
+
+      EDGE CASES:
+        - 207 bit-identical source duplicates (~0.004% of rows) on the PK are removed via a hash-aggregate dedup keyed on (event_bundle_sequence_id, event_server_timestamp_offset) NULLS LAST.
+        - Heavy-NULL / redundant columns dropped from the source: `user_id` (100% NULL), `event_dimensions` (100% NULL), `stream_id` (1:1 with `platform`).
+        - `user_first_touch_timestamp` excluded from this view — disagrees with first observed event for 97% of users.
+        - `event_date` (raw local-TZ string `YYYYMMDD`) disagrees with `event_date_utc` on 34% of rows; the project anchors on UTC. The local-TZ column is kept for source reconciliation only.
+        - `ga_session_id` is 100% NULL in this sample (kept for parity with the live-stream contract); session-level work uses `n_sessions_proxy = count(event_name='session_start')` instead.
+        - `device_os` has the literal string `"NaN"` normalized to NULL on read.
+        - `event_value_in_usd` is non-NULL only when `event_name = 'in_app_purchase'` — asserted by a singular test.
+    meta:
+      owner: analytics-eng
+      production_target_config: |
+        On BigQuery this becomes:
+          materialized: incremental
+          partition_by: event_date_utc
+          unique_key: [user_pseudo_id, event_timestamp, event_name]
+          incremental_strategy: merge
+        SQL stays the same; only configs change.
+    columns:
+      - name: user_pseudo_id
+        description: Stable, 100%-coverage user identifier (Firebase pseudonymous install/device ID). Part of the PK; primary key for `dim_users`.
+        data_tests:
+          - not_null
+      - name: event_timestamp
+        description: Microseconds since Unix epoch (BIGINT), UTC. Server-side timestamp set by the Firebase Analytics ingestion pipeline (not user click time). Part of the dedup PK.
+        data_tests:
+          - not_null
+      - name: event_ts_utc
+        description: Typed UTC `TIMESTAMP` derived from `event_timestamp` (`make_timestamp(event_timestamp)`). Server-side timestamp; UTC.
+        data_tests:
+          - not_null
+      - name: event_date_utc
+        description: |
+          UTC date of the event (`event_ts_utc::date`). Project-wide time anchor — disagrees
+          with the source's local-TZ `event_date` on 34% of rows. We standardize on UTC.
+        data_tests:
+          - not_null
+      - name: event_date
+        description: Raw local-TZ `event_date` (string `YYYYMMDD`) from the source. Kept only for source reconciliation; analytics use `event_date_utc`.
+      - name: event_name
+        description: Firebase event name (37 distinct values in the sample). Part of the dedup PK.
+        data_tests:
+          - not_null
+      - name: platform
+        description: |
+          Client platform. Allowed values: 'ANDROID', 'IOS'. Two product builds in the sample
+          (1:1 with `app_id`). `accepted_values` lives on the source — it's pure pass-through here.
+        data_tests:
+          - not_null
+      - name: event_value_in_usd
+        description: |
+          USD value of the purchase. Currency: USD; NUMERIC(18,4) — cast from source DOUBLE at
+          this layer so all downstream revenue arithmetic is exact-decimal. NULL for non-monetized
+          events; > 0 only on `event_name = 'in_app_purchase'` (asserted by a singular test).
+          Cohort-revenue source (we deliberately don't use `user_ltv` for cohort attribution).
+      - name: event_previous_timestamp
+        description: Microseconds since Unix epoch (UTC) — timestamp of the previous event for this user. Not consumed downstream; kept for ad-hoc QA.
+      - name: event_bundle_sequence_id
+        description: Sequence ID of the event bundle (Firebase batching). Used as a deterministic dedup tiebreaker (NULLS LAST).
+      - name: event_server_timestamp_offset
+        description: Server-side TZ offset (microseconds). Used as a secondary deterministic dedup tiebreaker (NULLS LAST).
+      - name: engagement_time_msec
+        description: Foreground engagement duration in milliseconds, extracted from `event_params`. NULL on events that don't carry an engagement timer (most non-engagement events). Summed per (user, day) in `int_user_daily_activity`.
+      - name: screen_class
+        description: '`event_params.firebase_screen_class` — the screen on which the event was emitted. Available for future per-screen slices; not currently consumed downstream.'
+      - name: previous_first_open_count
+        description: '`event_params.previous_first_open_count` — populated only on `event_name = ''first_open''`; > 0 indicates a reinstall. Source for `is_reinstall` in `dim_users`.'
+      - name: ga_session_id
+        description: '`event_params.ga_session_id`. ALWAYS NULL in this sample — kept for parity with the live-stream contract. Session-level work in this project uses `n_sessions_proxy` (count of `session_start` events) instead.'
+      - name: device_category
+        description: '`device.category`. Verified `mobile` / `tablet` only in the sample, 0% NULL.'
+        data_tests:
+          - not_null
+      - name: device_os
+        description: '`device.operating_system` with the literal `"NaN"` string normalized to NULL on read. NULL ≈ unknown/unparseable OS — treat as missing, not as a category.'
+      - name: country
+        description: '`geo.country`. ISO-style country names (`United States`, etc.). US dominates (~54% of users).'
+      - name: app_id
+        description: '`app_info.id` — bundle id (`com.labpixies.flood` on Android, `com.google.flood2` on iOS). 1:1 with `platform`.'
+      - name: traffic_medium
+        description: '`traffic_source.medium` at event time. ~75% `(none)`, < 1% paid in the sample.'
+      - name: traffic_source_name
+        description: '`traffic_source.name` — install campaign / source string from Firebase attribution.'
+
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - user_pseudo_id
+            - event_timestamp
+            - event_name
+      - dbt_utils.expression_is_true:
+          expression: "event_value_in_usd is null or (event_value_in_usd > 0 and event_name = 'in_app_purchase')"
+          config:
+            error_if: ">0"
+            warn_if: ">0"

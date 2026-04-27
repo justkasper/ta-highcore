@@ -1,0 +1,152 @@
+version: 2
+
+models:
+  - name: dim_users
+    description: |
+      ROLE: User dimension. Single source of truth for slowly-changing user
+      attributes — install context, cohort anchor, outlier flag.
+      USE WHEN: Cohort filtering, user-level slices, computing `cohort_size`
+      in reports, joining user attributes to facts.
+      DON'T USE FOR: Daily metrics (use `fct_user_daily`); raw event-level
+      questions (use `stg_events`). Don't bypass to `int_user_install` —
+      `dim_users` is the canonical user surface.
+
+      GRAIN: One row per `user_pseudo_id`.
+      PK: user_pseudo_id
+      FK: none (sourced from `int_user_install`).
+      DOWNSTREAM: fct_user_daily (FK relationship), mart_retention_*, mart_revenue_* (cohort_size source).
+
+      EDGE CASES:
+        - `is_outlier_events` is a DYNAMIC flag (`events_total > p99` ≈ 5,541 in the sample, ~1% of users) — surfaced for filtering downstream, NOT auto-filtered here.
+        - `is_reinstall` is BOOL NOT NULL — `false` includes both explicit `previous_first_open_count = 0` and "no `first_open` event observed". Don't read `false` as "definitely not a reinstall" without context.
+    meta:
+      owner: analytics-eng
+      business_domain: mobile-game-analytics
+    columns:
+      - name: user_pseudo_id
+        description: Primary key. Stable Firebase pseudonymous user identifier.
+        data_tests:
+          - not_null
+          - unique
+      - name: cohort_date
+        description: UTC date of the user's first observed event (`min(event_date_utc) per user`). Cohort anchor for retention and revenue reports.
+        data_tests:
+          - not_null
+      - name: install_platform
+        description: |
+          Client platform at install time. Allowed values: `ANDROID`, `IOS`.
+          `accepted_values` lives on the source — pure pass-through here.
+        data_tests:
+          - not_null
+      - name: install_country
+        description: '`geo.country` (full country name string, e.g. `United States`) at the time of the user''s first event.'
+      - name: install_traffic_medium
+        description: '`traffic_source.medium` at the time of the user''s first event. ~75% `(none)` in the sample.'
+      - name: install_app_id
+        description: '`app_info.id` (1:1 with `install_platform`).'
+      - name: first_event_name
+        description: |
+          Entry-funnel signal — `first_open` (canonical fresh install) / `screen_view` (re-entry without fresh `first_open`) / other. Pulled from the user's earliest event in `int_user_install`. Currently NOT consumed by any mart — held for ad-hoc analytics and a possible future `mart_*_by_first_event` slice.
+      - name: is_reinstall
+        description: |
+          `coalesce(bool_or(previous_first_open_count > 0), false)` per user. BOOL NOT NULL.
+          ~1% of users true. `false` covers both "saw first_open with previous_first_open_count = 0" AND "no first_open event observed" — don't read it as "definitely not a reinstall".
+      - name: is_outlier_events
+        description: |
+          `events_total > percentile_cont(0.99)` over `events_total` (p99 ≈ 5,541 in the sample).
+          Dynamic flag, ~1% of users — SURFACED, not a filter. Downstream models are free to ignore or exclude.
+
+  - name: fct_user_daily
+    description: |
+      ROLE: ★ Central fact ★. Sparse user × activity_date table — the single
+      source of truth that every report mart and every user-level drill-down
+      derives from.
+      USE WHEN: Any cohort, retention, or revenue derivation. Per-user
+      drill-down. Building new report marts.
+      DON'T USE FOR: Event-level questions (use `stg_events`); user-grain
+      attributes (use `dim_users`); pre-densified retention/revenue grids
+      (use `mart_retention_*` / `mart_revenue_*` — densification happens there).
+
+      GRAIN: One row per (user_pseudo_id, activity_date) where the user had ≥ 1 event that day. Sparse — there is NO `is_active` column; row presence plays that role.
+      PK: (user_pseudo_id, activity_date)
+      FK: user_pseudo_id → dim_users.user_pseudo_id (asserted via `relationships`).
+      DOWNSTREAM: mart_retention_overall, mart_retention_by_platform, mart_revenue_overall, mart_revenue_by_platform.
+
+      EDGE CASES:
+        - Row presence = `is_active` (semantic + cheaper on BigQuery: dense fact would carry ~60% rows with `is_active = 0`, scanned for nothing). Days without activity are NOT materialized; downstream marts densify via `day_numbers`.
+        - `cohort_date` is denormalized from `dim_users` so reports can filter cohorts without an extra JOIN.
+        - `paying_flag = (gross_revenue > 0)` — NOT `(n_purchases > 0)`. Three source `in_app_purchase` events have `event_value_in_usd = NULL`, which legitimately count toward `n_purchases` (count) but not toward `gross_revenue` (NULLs ignored by sum). `paying_flag` tracks ACTUAL money, which is the invariant we care about. The `(n_purchases > 0) = paying_flag` invariant is intentionally NOT tested.
+        - `gross_revenue = 0` (not NULL) on non-purchase days, via `coalesce` in the LEFT JOIN — non-payer days are explicit zeros, not absent.
+        - Size: ~150–200k rows in this sample (≈ 15,175 users × 10–13 active days on average).
+    meta:
+      owner: analytics-eng
+      business_domain: mobile-game-analytics
+    columns:
+      - name: user_pseudo_id
+        description: FK → `dim_users.user_pseudo_id`.
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_users')
+              field: user_pseudo_id
+      - name: cohort_date
+        description: '`dim_users.cohort_date` denormalized here so reports can group cohorts without an extra JOIN. UTC date.'
+        data_tests:
+          - not_null
+      - name: activity_date
+        description: UTC date of activity.
+        data_tests:
+          - not_null
+      - name: day_number
+        description: '`activity_date - cohort_date` in days. >= 0 by construction (a user can''t be active before their cohort_date).'
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: events
+        description: Number of events for this user on this day. >= 1 by sparse construction.
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 1"
+      - name: engagement_sec
+        description: 'Sum of `engagement_time_msec / 1000` for the day. NUMERIC(18,4); >= 0; never NULL (NULL-safe in `int_user_daily_activity`).'
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: n_sessions_proxy
+        description: |
+          PROXY session count (number of `session_start` events) — NOT a true session count. Firebase `ga_session_id` is 100% NULL in this sample. Currently NOT consumed by any mart — passed through as exploration column for future per-session slices (e.g. session-quality cohorts).
+      - name: gross_revenue
+        description: |
+          Gross revenue in USD for the day — `sum(event_value_in_usd)` over the user's purchase events.
+          0 (not NULL) on non-purchase days. NUMERIC(18,4); >= 0.
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: n_purchases
+        description: |
+          Number of `in_app_purchase` events for this user on this day. 0 on non-purchase days.
+          NOTE: counts source events; differs from `paying_flag` because 3 source events have NULL value
+          (count them but don't sum them). Use `paying_flag` for "did the user actually pay money".
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: paying_flag
+        description: |
+          `gross_revenue > 0` — was the user a payer on THIS specific day? A user paying on D2 and D5
+          gets `paying_flag = TRUE` on both days. Tracks actual money (USD inflow), so 3 source events
+          with NULL `event_value_in_usd` do NOT flip this flag.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - user_pseudo_id
+            - activity_date
+      - dbt_utils.expression_is_true:
+          expression: "paying_flag = (gross_revenue > 0)"
+          name: fct_user_daily_paying_flag_consistent_with_gross_revenue
+      # Intentionally NOT testing `(n_purchases > 0) = paying_flag`:
+      # the source has 3 in_app_purchase events with event_value_in_usd = NULL,
+      # which legitimately count toward n_purchases (count) but not toward
+      # gross_revenue (NULLs ignored by sum). paying_flag tracks actual
+      # money — that's the invariant we care about. (Documented in
+      # description EDGE CASES.)

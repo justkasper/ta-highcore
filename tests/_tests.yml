@@ -1,0 +1,99 @@
+version: 2
+
+data_tests:
+  - name: assert_paying_users_reconciliation
+    description: |
+      End-to-end paying-users reconciliation: distinct payers attributed in
+      `mart_revenue_overall` (any cohort, any `day_number` 0..30) must equal
+      distinct users with at least one `in_app_purchase` event in
+      `stg_events` that fell inside their D0..D30 cohort window.
+
+      Catches drift between the source revenue stream and the
+      cohort-attributed count in the dashboard. Complements
+      `assert_revenue_reconciliation` (which checks dollars).
+
+  - name: assert_revenue_reconciliation
+    description: |
+      End-to-end revenue reconciliation: total `cum_revenue` at the LAST
+      seen `day_number` per cohort, summed across cohorts (= D30 cumulative
+      revenue per cohort), must equal the sum of `in_app_purchase`
+      `event_value_in_usd` from `stg_events` restricted to events that fall
+      inside that user's D0..D30 cohort window.
+
+      Casts are aligned to `numeric(18, 4)` on both sides so float drift
+      cannot introduce false positives.
+
+  - name: assert_n_purchases_reconciliation
+    description: |
+      End-to-end `n_purchases` reconciliation: `sum(n_purchases)` in
+      `fct_user_daily` within each user's D0..D30 window must equal the
+      count of `in_app_purchase` events in `stg_events` that fell inside
+      the same cohort window.
+
+      Complements `assert_revenue_reconciliation` (dollars) and
+      `assert_paying_users_reconciliation` (distinct payers). `n_purchases`
+      counts EVERY `in_app_purchase` event including the 3 with NULL
+      `event_value_in_usd` — that's a documented semantic on
+      `fct_user_daily`, and forgetting it during a refactor (e.g. switching
+      the count to `count(*) filter (where gross_revenue > 0)`) would
+      silently lose those 3 events. This singular pins it.
+
+  - name: assert_cohort_size_reconciliation
+    description: |
+      The total of `cohort_size` at D0 across all cohorts in
+      `mart_retention_overall` must equal the total user count in
+      `dim_users`. Any discrepancy means we lost (or duplicated) users
+      somewhere between the dim and the densified retention grid.
+
+  - name: assert_d0_full_retention
+    description: |
+      On `day_number = 0`, every cohort member is active by construction
+      (`cohort_date` = first observed event date). So `retained_users` must
+      equal `cohort_size` and `retention_pct` must equal `1.0` in every D0
+      row. Any deviation flags a join/aggregation bug in the retention
+      mart.
+
+  - name: assert_d0_full_retention_by_platform
+    description: |
+      D0 full-retention invariant for the platform-sliced mart: for every
+      (`cohort_date`, `install_platform`) at `day_number = 0`,
+      `retained_users` must equal `cohort_size` and `retention_pct` must be
+      `1.0`.
+
+      Same invariant as `assert_d0_full_retention` but on the `by_platform`
+      variant — guards the platform-partitioned join independently.
+
+  - name: assert_cum_revenue_monotonic
+    description: |
+      Cumulative revenue must be monotonically non-decreasing within each
+      cohort as `day_number` grows. Any (`cohort_date`, `day_number`) row
+      whose `cum_revenue` is strictly less than the previous day's
+      `cum_revenue` is a window-function ordering bug.
+
+  - name: assert_cum_revenue_monotonic_by_platform
+    description: |
+      Cumulative revenue must be monotonically non-decreasing as
+      `day_number` grows within each (`cohort_date`, `install_platform`)
+      partition. Same shape as `assert_cum_revenue_monotonic`, applied to
+      the platform slice.
+
+  - name: assert_fct_dim_cohort_date_consistency
+    description: |
+      Denormalized `cohort_date` in `fct_user_daily` must match
+      `dim_users.cohort_date` for the same user. Generic tests on
+      `fct.cohort_date` only see the fact table's own column; if the join
+      in `fct_user_daily.sql` ever pulls a wrong `cohort_date`, none of the
+      existing tests catch it. This singular closes that gap.
+
+  - name: assert_revenue_days_are_activity_days
+    description: |
+      Every (`user_pseudo_id`, `activity_date`) pair in
+      `int_user_daily_revenue` must also exist in
+      `int_user_daily_activity`. The invariant holds today because
+      `int_user_daily_activity` groups every event by `event_date_utc` and
+      `in_app_purchase` is itself an event — but it's an implicit
+      consequence of the staging filter, not an enforced contract. If
+      `int_user_daily_activity` ever gains a stricter event-name filter
+      (e.g. excluding system events), purchase rows could fall through
+      `fct_user_daily`'s `from activity LEFT JOIN revenue` join and
+      silently lose revenue.

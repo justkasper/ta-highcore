@@ -1,1 +1,4 @@
-select unnest(generate_series(0, {{ var('max_day_number') }})) as day_number
+select cast(generated_number - 1 as integer) as day_number
+from (
+    {{ dbt_utils.generate_series(upper_bound=var('max_day_number') + 1) }}
+)

@@ -1,4 +1,3 @@
--- See `tests/_tests.yml` for full docs.
 
 with ordered as (
     select

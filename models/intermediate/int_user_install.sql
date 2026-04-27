@@ -1,23 +1,3 @@
-{#-
-    User-grain install attributes. One row per `user_pseudo_id`.
-
-    cohort_date = first observed event_date_utc — the only 100%-coverage anchor
-    available (`user_first_touch_timestamp` disagrees with the first observed
-    event for 97% of users; the `first_open` event is present for only 28%).
-    See docs/data_exploration.md.
-
-    `install_*` attributes are taken from the row of the user's first event.
-    Tie-break on equal `event_ts_utc`: alphabetical `event_name`, then
-    `event_bundle_sequence_id NULLS LAST`, then
-    `event_server_timestamp_offset NULLS LAST` — deterministic across re-runs
-    and against the rare case where two events share `(timestamp, event_name)`
-    (which would happen only if upstream `stg_events` dedup ever regresses).
-
-    `is_reinstall` is `bool_or(previous_first_open_count > 0)` per user.
-    `previous_first_open_count` is populated only on `event_name = 'first_open'`,
-    so `bool_or` is the right NULL-safe aggregator across all events.
--#}
-
 with stg as (
     select * from {{ ref('stg_events') }}
 ),

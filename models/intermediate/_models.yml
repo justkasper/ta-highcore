@@ -119,7 +119,7 @@ models:
       EDGE CASES:
         - Sparse: rows exist only on days the user had ≥ 1 `in_app_purchase` event. Days without purchases are NOT materialized — non-payer days inherit `gross_revenue = 0` via the LEFT JOIN in `fct_user_daily`.
         - Tiny in this sample: 27 events / 24 distinct payers / $24.89 total. Sparse statistics — read relatively, not as absolute KPIs.
-        - Filter is `event_name = 'in_app_purchase'` (NOT `event_value_in_usd > 0`); see `docs/assumptions.md` #10. Source-level events with NULL `event_value_in_usd` would be counted in `n_purchases` but skipped by `sum(gross_revenue)` (NULLs ignored by sum) — fact-table consequence is documented on `fct_user_daily`.
+        - Filter is `event_name = 'in_app_purchase'` (NOT `event_value_in_usd > 0`): the `in_app_purchase` event is the contract for "money changed hands"; `event_value_in_usd` is the monetary payload, which can legitimately be NULL on a real purchase event. Source-level events with NULL `event_value_in_usd` would be counted in `n_purchases` but skipped by `sum(gross_revenue)` (NULLs ignored by sum) — fact-table consequence is documented on `fct_user_daily`.
         - Tests trimmed to `not_null` on PK columns; uniqueness covered downstream.
     meta:
       owner: analytics-eng

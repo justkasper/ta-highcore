@@ -1,4 +1,4 @@
-# Part 4 — Dashboard sketch: Cohort Health
+# Dashboard sketch: Cohort Health
 
 Cohort Health — дашборд про retention и монетизацию новых игроков в первые дни. Документ описывает, какой запрос продакта закрывается, как он раскладывается на метрики и чарты, какие принципы визуализации лежат в основе layout'а и какие компромиссы при этом приняты.
 
@@ -8,12 +8,12 @@ Cohort Health — дашборд про retention и монетизацию но
 
 > «Нам надо понять, как себя ведут новые игроки в первые дни. Хотим видеть retention, понимать монетизацию по когортам. Сделай нам простой дашборд, чтобы я мог сам туда заходить и смотреть.»
 
-Из запроса получаются четыре требования к дашборду — каждое замыкается на конкретные блоки страницы:
+Декомпозиция:
 
-1. **Когортный взгляд.** «Как себя ведут новые игроки» = смотрим декаю по `day_number` для каждой когорты, не календарные тренды.
-2. **Retention + монетизация на одной странице.** «Хотим видеть retention, понимать монетизацию по когортам» = на странице должны быть оба класса метрик. Retention раскладывается на D1/D3/D7 (плашка 3.1) + retention-кривые (3.3 левая панель, 3.4 D7-trend). Монетизация — на cum_arpu и paying_share (плашка 3.1, cum_arpu в 3.3 правой панели, paying_share в 3.4 и 3.5). Платформенный разрез повторяет ту же тройку метрик в блоке 3.5.
-3. **Первые дни.** «В первые дни» сужает горизонт до D0..D7, поэтому KPI-плашка собрана из D1/D3/D7 + ARPU@D7 + PAY%@D7 — а не из «классической F2P-тройки» D7/D14/D30. D14/D30 остаются на cohort triangle и curve-чартах как контекст (там horizon до 30), но не попадают в первый взгляд.
-4. **Self-serve.** «Сделай простой, чтобы я мог сам заходить» = одна страница, фильтры (период + платформа), default-вью без настройки.
+- **Юнит анализа** — когорта новых установок (cohort_date = первый день, когда `user_pseudo_id` появился в окне выборки).
+- **Retention** — для каждой когорты доля игроков, активных на день `N` после установки (`day_number = 0..30`), где «активен» = эмитировал ≥ 1 любое событие в этот день.
+- **Monetization** — для тех же `(cohort_date, day_number)`: cumulative revenue, ARPU, ARPPU, доля платящих.
+- **«Простой дашборд»** — BI-слой собирается из готовых mart-таблиц без window-функций или сложных join'ов. Грейн витрин совпадает с грейном чартов; срезы и фильтры реализованы как обычные колонки.
 
 ---
 
@@ -76,13 +76,13 @@ Cohort Health — дашборд про retention и монетизацию но
 
 | # | Блок | Mart | Что показывает | Расчёт поверх mart'а |
 |---|---|---|---|---|
-| 3.1 | KPI: ARPU@D7, PAY%@D7, D1, D3, D7 | `mart_retention_overall`, `mart_revenue_overall` | значение на последней полной когорте + дельта vs trailing 4w | для значения — `WHERE cohort_date = max_full(cohort_date)`; для дельты по retention/ARPU — прямой `SELECT` `*_trailing_4w_avg`; по PAY% — тривиальный `AVG(paying_share)` на BI-стороне (нет mart-колонки) |
+| 3.1 | KPI: ARPU@D7, PAY%@D7, D1, D3, D7 | `mart_retention_overall`, `mart_revenue_overall` | значение на последней полной когорте + дельта vs trailing 4w | для значения — `WHERE cohort_date = max_full(cohort_date)`; для дельты — прямой `SELECT` `*_trailing_4w_avg` (retention / cum_arpu / paying_share — все три mart-колонки) |
 | 3.2 | Cohort triangle | `mart_retention_overall` | retention в матрице (`cohort_date × day_number`), цвет = `retention_pct` | прямой `SELECT`; Y-сортировка `cohort_date DESC` (последняя сверху) |
 | 3.3 | Current vs trailing 4w avg (2-panel) | `mart_retention_overall`, `mart_revenue_overall` | левая панель — retention vs `day_number` (selected + baseline); правая — cum_arpu vs `day_number` (selected + baseline) | прямой `SELECT` `retention_pct_trailing_4w_avg` и `cum_arpu_trailing_4w_avg` (колонки mart'ов) |
 | 3.4 | Cohort comparison (3 sub-charts) | `mart_revenue_overall`, `mart_retention_overall` | D7 trend (weekly), cum_arpu × cohort, paying_share × cohort — без платформенного среза | прямой `SELECT`, серия = `cohort_date` (для D7-trend — weekly weighted mean) |
 | 3.5 | Platform breakdown (3 sub-charts) | `mart_*_by_platform` | те же три метрики, серия = `install_platform`; порядок панелей идентичен 3.4 (retention → cum_arpu → paying_share) | прямой `SELECT`, серия = `install_platform`; D7-trend — weekly weighted mean |
 
-**Headless-BI** — все блоки прямой `SELECT` поверх mart'ов. Trailing-4w baseline для retention и cum_arpu берётся из mart-колонок `retention_pct_trailing_4w_avg` / `cum_arpu_trailing_4w_avg` (макрос `cohort_trailing_avg`). Для PAY%/paying_share trailing-avg-колонки нет (отдельный extension-point) — дельта в KPI 3.1 считается тривиальным `AVG()` поверх 28-дневного диапазона на BI-стороне; это единственный оставшийся не-mart-агрегат на дашборде.
+**Headless-BI** — все блоки прямой `SELECT` поверх mart'ов. Trailing-4w baseline для retention, cum_arpu и paying_share берётся из mart-колонок `retention_pct_trailing_4w_avg` / `cum_arpu_trailing_4w_avg` / `paying_share_trailing_4w_avg` (общий макрос `trailing_avg`). Не-mart-агрегатов на дашборде нет.
 
 ### 3.1 Header KPIs
 
@@ -121,7 +121,9 @@ Cohort Health — дашборд про retention и монетизацию но
 - **Средний** — cumulative ARPU, серия = `cohort_date`, X = `day_number`. Ищем веером ли расходятся кривые (нормально) или одна когорта аномально вверх (whale в первые дни).
 - **Правый** — paying_share к D-N по когортам, серия = `cohort_date`. Резкий рост в первые ~3 дня = ранние whale-конверсии, пологая кривая = монетизация требует длинного onboarding'а.
 
-На картинке выше — 4 когорты сентября с реальной платёжной активностью (2018-09-06, 09-12, 09-19, 09-24): cum_arpu уплощается уже к D1 (один платёж в самом начале когорты, дальше плоско) — характерный single-payment профиль на этом сэмпле. D7-retention weekly по 13 неделям июля-сентября колеблется 2–7% без устойчивого тренда вниз.
+**Какие когорты выводим на средней и правой панелях.** По умолчанию — `selected cohort` + **4 предыдущих когорты с шагом 7 дней** (5 серий, цветовой градиент old → new). `selected cohort` берётся из общего фильтра дашборда (default = `max_full(cohort_date)` — последняя когорта с полным D30, та же, что в 3.1 и 3.3); 4 предыдущих считаются как `selected - INTERVAL k*7 day` для `k ∈ 1..4`.
+
+На картинке выше — **illustrative pick**, не default-логика: 4 когорты сентября с реальной платёжной активностью (2018-09-06, 09-12, 09-19, 09-24), вручную выбранные ради видимого монетизационного сигнала на тонком сэмпле (24 платящих на 114 дней; weekly-from-selected на этом сэмпле даёт почти везде нулевые `cum_arpu`/`paying_share`). На картинке cum_arpu уплощается уже к D1 (один платёж в начале когорты, дальше плоско) — характерный single-payment профиль на сэмпле. D7-retention weekly по 13 неделям июля-сентября колеблется 2–7% без устойчивого тренда вниз.
 
 ### 3.5 Platform breakdown
 
@@ -166,7 +168,6 @@ Cohort Health — дашборд про retention и монетизацию но
 | `mart_*_by_country` | Шаблон копипастится с `*_by_platform` (~10 мин), но: US = 54% юзеров, остальные страны имеют когорты по 5–20 человек — серии будут шумить. Не блокер, но low-value на этом сэмпле. | Когда продакт явно попросит country slice или объём данных вырастет. |
 | `mart_*_by_traffic` | Из `assumptions.md` §14: paid < 1% трафика, 24 платящих на весь сэмпл — slice по `traffic_medium` даёт пустые ячейки и ложные тренды. | На реальных production-данных с осмысленным paid-traffic. |
 | Engagement-метрики (sessions / engagement_sec) | `fct_user_daily.engagement_sec` есть, но в reports-mart'ы не выведен. Не озвучен в брифе продакта. | Когда понадобится «качество сессии» / churn-предикторы. |
-| `paying_share_trailing_4w_avg` колонка в mart'е | Для retention и cum_arpu trailing-4w-avg уже есть mart-колонки (макрос `cohort_trailing_avg`); для paying_share — нет. Дельта в KPI 3.1 пока считается тривиальным `AVG()` на BI-стороне. | Если KPI-плашка вырастет / появится paying-share-фокусированный режим. |
 | A/B-разрезы (`firebase_exp_*`) | Не озвучены в брифе; в этом сэмпле всё равно нет настроенных экспериментов. | На проде с реальными A/B. |
 | Tabbed layout (Retention / Monetization / Platform) | Для 5 блоков и 4 mart'ов overkill; добавит навигационный шум. | Когда число блоков перевалит за ~10 или появятся 3+ среза. |
 | `last cohort` toggle (last cohort vs weighted avg по периоду) | Default = last cohort, как просил продакт. Toggle не делал, чтобы не усложнять self-serve. | Если в ревью прилетит запрос «дай мне period-weighted-вью». |
@@ -188,13 +189,3 @@ Cohort Health — дашборд про retention и монетизацию но
 - **«Public sample, 50k events/day»** — абсолютные числа (cohort_size, gross_revenue) репрезентативны как пропорции, но не как масштаб. См. `data_exploration.md` §Source and grain.
 - **Когорта 2018-06-12 left-censored** — все юзеры этого дня по построению «новые», что раздувает первую когорту. На дашборде помечается флажком; агрегаты типа «средний D7 по периоду» исключают её (см. `assumptions.md` §2 решение #8).
 - **Cum_arppu = NULL до первого платежа в когорте** — by design (`/0`-protect), а не пропуск данных.
-
----
-
-## 7. Связанные документы
-
-- [`TEST_ASSIGNMENT.md`](../TEST_ASSIGNMENT.md) — оригинальное ТЗ (Part 4).
-- [`docs/assumptions.md`](assumptions.md) — продуктовые допущения, таблица «допущение → витрина».
-- [`docs/architecture.md`](architecture.md) — слои, mart'ы, materializations.
-- [`docs/data_exploration.md`](data_exploration.md) — числа, на которые опираются обоснования descope/extension.
-- [`scripts/render_dashboard_mocks.py`](../scripts/render_dashboard_mocks.py) — скрипт, генерирующий мок-картинки в `docs/img/dashboard/`.

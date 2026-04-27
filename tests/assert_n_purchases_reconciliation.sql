@@ -1,15 +1,4 @@
--- End-to-end n_purchases reconciliation:
---   sum(n_purchases) in fct_user_daily within each user's D0..D30 window
--- must equal the count of `in_app_purchase` events in stg_events that fell
--- inside the same cohort window.
---
--- Complements assert_revenue_reconciliation.sql (dollars) and
--- assert_paying_users_reconciliation.sql (distinct payers). n_purchases
--- counts EVERY in_app_purchase event including the 3 with NULL
--- `event_value_in_usd` — that's a documented semantic on `fct_user_daily`,
--- and forgetting it during a refactor (e.g. switching the count to
--- `count(*) filter (where gross_revenue > 0)`) would silently lose those
--- 3 events. This singular pins it.
+-- See `tests/_tests.yml` for full docs.
 
 with mart_side as (
     select sum(fct.n_purchases) as total_n_purchases

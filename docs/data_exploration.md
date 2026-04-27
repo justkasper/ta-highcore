@@ -1,4 +1,4 @@
-# Free-form report — ответы на вопросы Части 1
+# Free-form report — ответы на вопросы EDA
 
 Сжатые ответы по трём пунктам ассайнмента. Полные таблицы и числа — в doc-блоке `raw_events__eda` к источнику `raw.events` (рендерится в `dbt docs` через `make docs`; исходник — [`models/staging/_raw_events__eda.md`](../models/staging/_raw_events__eda.md)), на разделы которого здесь идут ссылки.
 

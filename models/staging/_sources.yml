@@ -3,9 +3,113 @@ version: 2
 sources:
   - name: raw
     schema: raw
+    loader: prepare_data_py
+    description: |
+      ROLE: Raw Firebase Analytics events from the public BigQuery sample
+      `firebase-public-project.analytics_153293282` (mobile F2P game "Flood-It!").
+      Loaded once from a static parquet snapshot via `scripts/prepare_data.py`
+      into a local DuckDB warehouse — no live stream.
+      USE WHEN: Need event-grain data with full nested structs (event_params,
+      user_properties, device, geo, app_info, traffic_source, user_ltv) before
+      typing/dedup.
+      DON'T USE FOR: Anything analytics-facing — reach for `stg_events`. Source
+      carries known duplicates and a ~34% TZ skew between `event_date` and
+      `event_timestamp` that staging resolves.
+
+      EDGE CASES:
+        - Static 2018 sample — never refreshed, freshness intentionally not declared (production target: `freshness: warn_after: 1 day` via `loaded_at_field: _LOAD_TIMESTAMP` on BigQuery).
+        - Hard-cap 50,000 events/day — public-sample artefact (114 days × 50k = 5.7M rows). Cohort sizes and absolute counts are non-representative; read relatively.
+        - 207 bit-identical duplicates on (user_pseudo_id, event_timestamp, event_name) by design (~0.004% of rows). Dedup happens in `stg_events`; never put `unique_combination_of_columns` here.
+        - `event_date` is local-TZ but `event_timestamp` is UTC; they disagree on 34% of rows. Project standardizes on UTC via `event_date_utc = event_timestamp::date`.
+        - `user_first_touch_timestamp` disagrees with the user's first observed event for 97% of users; `first_open` event present for only 28%. Cohort anchor is `min(event_date_utc) per user_pseudo_id`, not either of those.
+        - Period: 2018-06-12 → 2018-10-03 (UTC events spill to 2018-10-04 07:01).
+    meta:
+      owner: analytics-eng
+      business_domain: mobile-game-analytics
+      pii: false
     tables:
       - name: events
-        description: >
-          Raw Firebase Analytics events from a mobile F2P game (Flood It!).
-          Contains nested fields: event_params, user_properties, device, geo.
-          Period: 2018-06-12 to 2018-10-03.
+        description: |
+          ROLE: One row per Firebase event (~5.7M rows in the sample).
+          USE WHEN: Need raw nested struct access (event_params lists, device
+          struct, geo struct, etc.) before flattening.
+          DON'T USE FOR: Analytics work — `stg_events` is the deduplicated,
+          flattened, UTC-typed view that downstream models build on.
+
+          GRAIN: One row per Firebase event. After dedup in `stg_events` the PK is
+          (user_pseudo_id, event_timestamp, event_name) — uniqueness is asserted
+          on `stg_events`, not here (source carries 207 bit-identical duplicates by design).
+          DOWNSTREAM: stg_events (only direct consumer).
+
+          EDGE CASES:
+            - 207 source duplicates on the dedup key — handled in `stg_events`, do NOT add a uniqueness test here.
+            - 37 distinct `event_name` values in the sample.
+            - `user_id` is 100% NULL; `event_dimensions` is 100% NULL; `stream_id` is 1:1 with `platform`. Dropped from `stg_events`.
+
+          ---
+
+          {{ doc('raw_events__eda') }}
+        columns:
+          - name: user_pseudo_id
+            description: PK (after dedup). Stable, 100%-coverage user identifier — Firebase-assigned pseudonymous device/install ID. Source contract — must never be NULL.
+            data_tests:
+              - not_null
+          - name: event_timestamp
+            description: Microseconds since epoch (Unix epoch, UTC). Server-side timestamp set by the Firebase Analytics ingestion pipeline. Part of the dedup key. Source contract — non-null.
+            data_tests:
+              - not_null
+          - name: event_name
+            description: |
+              Firebase event name (37 distinct values in the sample). Mix of automatic events
+              (`session_start`, `first_open`, `screen_view`, `user_engagement`) and gameplay events
+              (`level_start`, `level_complete`, `in_app_purchase`, etc.). Part of the dedup key.
+            data_tests:
+              - not_null
+          - name: platform
+            description: |
+              Client platform. Two values in the sample:
+                - 'ANDROID' — `com.labpixies.flood`
+                - 'IOS'     — `com.google.flood2`
+              1:1 with `app_info.id` — same product, two builds.
+            data_tests:
+              - not_null
+              - accepted_values:
+                  values: ["ANDROID", "IOS"]
+          - name: event_date
+            description: Local-TZ date string `YYYYMMDD`. Disagrees with UTC `event_timestamp` on 34% of rows — `stg_events` keeps it only for source reconciliation; analytics use `event_date_utc`.
+          - name: event_value_in_usd
+            description: USD-denominated value of the event. Source DOUBLE; cast to NUMERIC(18,4) at the staging layer for exact-decimal revenue. NULL for non-monetized events; > 0 only on `event_name = 'in_app_purchase'`. Source for cohort-revenue (we deliberately don't use `user_ltv` for cohort attribution).
+          - name: event_params
+            description: |
+              Nested ARRAY<STRUCT<key, value: STRUCT<string_value, int_value, float_value, double_value>>>.
+              Firebase event-parameter bag. Keys flattened in `stg_events`:
+              `engagement_time_msec`, `firebase_screen_class`, `previous_first_open_count`, `ga_session_id`.
+              All other keys remain raw — query the struct directly if needed.
+          - name: user_properties
+            description: Nested user-property bag (Firebase user-scoped attributes). Not consumed downstream; preserved for future use.
+          - name: device
+            description: |
+              Nested STRUCT — device metadata. Keys flattened in `stg_events`:
+              `category` → `device_category`; `operating_system` → `device_os` (literal string `"NaN"` normalized to NULL).
+          - name: geo
+            description: Nested STRUCT — geo metadata. `country` flattened in `stg_events` (US dominates, ~54% of users).
+          - name: app_info
+            description: Nested STRUCT — app metadata. `id` flattened in `stg_events` (`com.labpixies.flood` Android / `com.google.flood2` iOS; 1:1 with `platform`).
+          - name: traffic_source
+            description: Nested STRUCT — install attribution. `medium` (~75% `(none)`, < 1% paid) and `name` flattened in `stg_events`.
+          - name: user_ltv
+            description: Nested STRUCT — Firebase-computed lifetime value. NOT used downstream — cohort revenue is derived from `event_value_in_usd` on `in_app_purchase` events, not from this field.
+          - name: user_id
+            description: Application-set user ID. 100% NULL in this sample — dropped from `stg_events`.
+          - name: event_dimensions
+            description: Custom event dimensions. 100% NULL in this sample — dropped from `stg_events`.
+          - name: stream_id
+            description: Firebase stream ID. 1:1 with `platform` — redundant, dropped from `stg_events`.
+          - name: event_previous_timestamp
+            description: Microseconds — timestamp of the previous event for this user.
+          - name: event_bundle_sequence_id
+            description: Sequence ID of the event bundle. Used as a deterministic dedup tiebreaker in `stg_events`.
+          - name: event_server_timestamp_offset
+            description: Server-side TZ offset. Used as a deterministic dedup tiebreaker in `stg_events`.
+          - name: user_first_touch_timestamp
+            description: Microseconds — Firebase-reported first touch. Disagrees with the user's first observed event for 97% of users; NOT used as cohort anchor (we use `min(event_date_utc)` instead).

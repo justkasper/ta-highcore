@@ -1,0 +1,178 @@
+version: 2
+
+# Unit tests for marts/reports. Cover the riskiest SQL in the project —
+# window-function cumulatives, the NULL/0-payer edge case in cum_arppu,
+# and the semantic subtlety in cum_paying_users.
+
+unit_tests:
+  - name: mart_revenue_overall_dry_cohort_arppu_is_null
+    description: >
+      Cohort with zero payers across the entire window: every row must
+      exist (densification works on empty fct), cum_arppu must be NULL
+      (CASE branch — explicitly NULL when no payers, not 0/0 error).
+    model: mart_revenue_overall
+    given:
+      - input: ref('dim_users')
+        rows:
+          - {user_pseudo_id: 'U1', cohort_date: '2018-06-12'}
+          - {user_pseudo_id: 'U2', cohort_date: '2018-06-12'}
+      - input: ref('fct_user_daily')
+        rows: []
+      - input: ref('day_numbers')
+        rows:
+          - {day_number: 0}
+          - {day_number: 1}
+          - {day_number: 2}
+    expect:
+      rows:
+        - {cohort_date: '2018-06-12', day_number: 0, cohort_size: 2, gross_revenue: 0, paying_users: 0, cum_revenue: 0, cum_paying_users: 0, cum_arpu: 0, cum_arppu: null, paying_share: 0}
+        - {cohort_date: '2018-06-12', day_number: 1, cohort_size: 2, gross_revenue: 0, paying_users: 0, cum_revenue: 0, cum_paying_users: 0, cum_arpu: 0, cum_arppu: null, paying_share: 0}
+        - {cohort_date: '2018-06-12', day_number: 2, cohort_size: 2, gross_revenue: 0, paying_users: 0, cum_revenue: 0, cum_paying_users: 0, cum_arpu: 0, cum_arppu: null, paying_share: 0}
+
+  - name: mart_revenue_overall_cumulative_correctness
+    description: >
+      Two distinct payers on D0 ($0.99) and D2 ($1.50) in a 10-user
+      cohort. Verifies that gross_revenue is per-day, while cum_revenue,
+      cum_paying_users, cum_arpu, cum_arppu, and paying_share roll up
+      correctly through the window function.
+    model: mart_revenue_overall
+    given:
+      - input: ref('dim_users')
+        rows:
+          - {user_pseudo_id: 'U1',  cohort_date: '2018-06-12'}
+          - {user_pseudo_id: 'U2',  cohort_date: '2018-06-12'}
+          - {user_pseudo_id: 'U3',  cohort_date: '2018-06-12'}
+          - {user_pseudo_id: 'U4',  cohort_date: '2018-06-12'}
+          - {user_pseudo_id: 'U5',  cohort_date: '2018-06-12'}
+          - {user_pseudo_id: 'U6',  cohort_date: '2018-06-12'}
+          - {user_pseudo_id: 'U7',  cohort_date: '2018-06-12'}
+          - {user_pseudo_id: 'U8',  cohort_date: '2018-06-12'}
+          - {user_pseudo_id: 'U9',  cohort_date: '2018-06-12'}
+          - {user_pseudo_id: 'U10', cohort_date: '2018-06-12'}
+      - input: ref('fct_user_daily')
+        rows:
+          - {user_pseudo_id: 'U1', cohort_date: '2018-06-12', activity_date: '2018-06-12', day_number: 0, gross_revenue: 0.99, paying_flag: true}
+          - {user_pseudo_id: 'U2', cohort_date: '2018-06-12', activity_date: '2018-06-14', day_number: 2, gross_revenue: 1.50, paying_flag: true}
+      - input: ref('day_numbers')
+        rows:
+          - {day_number: 0}
+          - {day_number: 1}
+          - {day_number: 2}
+    expect:
+      rows:
+        - {cohort_date: '2018-06-12', day_number: 0, cohort_size: 10, gross_revenue: 0.99, paying_users: 1, cum_revenue: 0.99, cum_paying_users: 1, cum_arpu: 0.099, cum_arppu: 0.99,  paying_share: 0.1}
+        - {cohort_date: '2018-06-12', day_number: 1, cohort_size: 10, gross_revenue: 0,    paying_users: 0, cum_revenue: 0.99, cum_paying_users: 1, cum_arpu: 0.099, cum_arppu: 0.99,  paying_share: 0.1}
+        - {cohort_date: '2018-06-12', day_number: 2, cohort_size: 10, gross_revenue: 1.50, paying_users: 1, cum_revenue: 2.49, cum_paying_users: 2, cum_arpu: 0.249, cum_arppu: 1.245, paying_share: 0.2}
+
+  - name: mart_retention_overall_trailing_avg_partial_window_accumulates
+    description: >
+      Four daily cohorts at D7 with retentions {1.0, 1.0, 0.0, 0.0}.
+      The window grows: NULL → avg(1.0) → avg(1.0, 1.0) → avg(1.0, 1.0, 0.0).
+      Pins the rows-frame semantic — covers cases (1) NULL on first cohort
+      and (2) partial-window accumulation. Window saturation at 28 rows
+      is a built-in SQL frame contract; no separate fixture needed.
+    model: mart_retention_overall
+    given:
+      - input: ref('dim_users')
+        rows:
+          - {user_pseudo_id: 'U1', cohort_date: '2018-06-12'}
+          - {user_pseudo_id: 'U2', cohort_date: '2018-06-13'}
+          - {user_pseudo_id: 'U3', cohort_date: '2018-06-14'}
+          - {user_pseudo_id: 'U4', cohort_date: '2018-06-15'}
+      - input: ref('fct_user_daily')
+        rows:
+          - {user_pseudo_id: 'U1', cohort_date: '2018-06-12', activity_date: '2018-06-19', day_number: 7}
+          - {user_pseudo_id: 'U2', cohort_date: '2018-06-13', activity_date: '2018-06-20', day_number: 7}
+      - input: ref('day_numbers')
+        rows:
+          - {day_number: 7}
+    expect:
+      rows:
+        - {cohort_date: '2018-06-12', day_number: 7, retention_pct: 1.0, retention_pct_trailing_4w_avg: null}
+        - {cohort_date: '2018-06-13', day_number: 7, retention_pct: 1.0, retention_pct_trailing_4w_avg: 1.0}
+        - {cohort_date: '2018-06-14', day_number: 7, retention_pct: 0.0, retention_pct_trailing_4w_avg: 1.0}
+        - {cohort_date: '2018-06-15', day_number: 7, retention_pct: 0.0, retention_pct_trailing_4w_avg: 0.6667}
+
+  - name: mart_retention_by_platform_trailing_avg_independent_per_platform
+    description: >
+      `install_platform` enters the partition, so each platform's
+      trailing baseline is computed independently — iOS history does
+      not leak into Android baselines and vice versa. Two cohorts ×
+      two platforms with mirrored retention {1.0, 0.0} vs {0.0, 1.0}
+      pin this isolation.
+    model: mart_retention_by_platform
+    given:
+      - input: ref('dim_users')
+        rows:
+          - {user_pseudo_id: 'I1', cohort_date: '2018-06-12', install_platform: 'IOS'}
+          - {user_pseudo_id: 'I2', cohort_date: '2018-06-13', install_platform: 'IOS'}
+          - {user_pseudo_id: 'A1', cohort_date: '2018-06-12', install_platform: 'ANDROID'}
+          - {user_pseudo_id: 'A2', cohort_date: '2018-06-13', install_platform: 'ANDROID'}
+      - input: ref('fct_user_daily')
+        rows:
+          - {user_pseudo_id: 'I1', cohort_date: '2018-06-12', activity_date: '2018-06-19', day_number: 7}
+          - {user_pseudo_id: 'A2', cohort_date: '2018-06-13', activity_date: '2018-06-20', day_number: 7}
+      - input: ref('day_numbers')
+        rows:
+          - {day_number: 7}
+    expect:
+      rows:
+        - {cohort_date: '2018-06-12', install_platform: 'IOS',     day_number: 7, retention_pct: 1.0, retention_pct_trailing_4w_avg: null}
+        - {cohort_date: '2018-06-13', install_platform: 'IOS',     day_number: 7, retention_pct: 0.0, retention_pct_trailing_4w_avg: 1.0}
+        - {cohort_date: '2018-06-12', install_platform: 'ANDROID', day_number: 7, retention_pct: 0.0, retention_pct_trailing_4w_avg: null}
+        - {cohort_date: '2018-06-13', install_platform: 'ANDROID', day_number: 7, retention_pct: 1.0, retention_pct_trailing_4w_avg: 0.0}
+
+  - name: mart_revenue_overall_cum_arpu_trailing_avg_partial_window_accumulates
+    description: >
+      Four daily 1-user cohorts at D0 with cum_arpu {1.0, 2.0, 0.0, 0.0}.
+      Window grows: NULL → avg(1.0) → avg(1.0, 2.0) = 1.5 → avg(1.0, 2.0, 0.0) = 1.0.
+      Pins the rows-frame semantic for cum_arpu and confirms the
+      generalized `trailing_avg` macro works on revenue metrics.
+    model: mart_revenue_overall
+    given:
+      - input: ref('dim_users')
+        rows:
+          - {user_pseudo_id: 'U1', cohort_date: '2018-06-12'}
+          - {user_pseudo_id: 'U2', cohort_date: '2018-06-13'}
+          - {user_pseudo_id: 'U3', cohort_date: '2018-06-14'}
+          - {user_pseudo_id: 'U4', cohort_date: '2018-06-15'}
+      - input: ref('fct_user_daily')
+        rows:
+          - {user_pseudo_id: 'U1', cohort_date: '2018-06-12', activity_date: '2018-06-12', day_number: 0, gross_revenue: 1.00, paying_flag: true}
+          - {user_pseudo_id: 'U2', cohort_date: '2018-06-13', activity_date: '2018-06-13', day_number: 0, gross_revenue: 2.00, paying_flag: true}
+      - input: ref('day_numbers')
+        rows:
+          - {day_number: 0}
+    expect:
+      rows:
+        - {cohort_date: '2018-06-12', day_number: 0, cum_arpu: 1.0, cum_arpu_trailing_4w_avg: null}
+        - {cohort_date: '2018-06-13', day_number: 0, cum_arpu: 2.0, cum_arpu_trailing_4w_avg: 1.0}
+        - {cohort_date: '2018-06-14', day_number: 0, cum_arpu: 0.0, cum_arpu_trailing_4w_avg: 1.5}
+        - {cohort_date: '2018-06-15', day_number: 0, cum_arpu: 0.0, cum_arpu_trailing_4w_avg: 1.0}
+
+  - name: mart_revenue_overall_same_user_paying_twice_inflates_cum_paying
+    description: >
+      Same user paying on D0 and D2 contributes to cum_paying_users on
+      both days (sum across days, not distinct over time). Locks the
+      semantic noted in the column description — refactoring to a
+      "distinct payers up to day_number" definition would change
+      ARPPU calculations and should be deliberate.
+    model: mart_revenue_overall
+    given:
+      - input: ref('dim_users')
+        rows:
+          - {user_pseudo_id: 'U1', cohort_date: '2018-06-12'}
+      - input: ref('fct_user_daily')
+        rows:
+          - {user_pseudo_id: 'U1', cohort_date: '2018-06-12', activity_date: '2018-06-12', day_number: 0, gross_revenue: 1.00, paying_flag: true}
+          - {user_pseudo_id: 'U1', cohort_date: '2018-06-12', activity_date: '2018-06-14', day_number: 2, gross_revenue: 1.00, paying_flag: true}
+      - input: ref('day_numbers')
+        rows:
+          - {day_number: 0}
+          - {day_number: 1}
+          - {day_number: 2}
+    expect:
+      rows:
+        - {cohort_date: '2018-06-12', day_number: 0, paying_users: 1, cum_paying_users: 1}
+        - {cohort_date: '2018-06-12', day_number: 1, paying_users: 0, cum_paying_users: 1}
+        - {cohort_date: '2018-06-12', day_number: 2, paying_users: 1, cum_paying_users: 2}

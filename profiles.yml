@@ -4,4 +4,13 @@ highcore_ae_test:
     dev:
       type: duckdb
       path: ./data/warehouse.duckdb
-      threads: 4
+      # Local-only safeguards for cold-rebuild on 8 GB sandboxes:
+      # threads=1 avoids parallel-pipeline peaks that SIGKILL'd previous
+      # cold builds; memory_limit caps DuckDB's transient buffers below
+      # the OS OOM threshold so spill kicks in before the OS does.
+      threads: 1
+      settings:
+        memory_limit: '1500MB'
+        threads: 1
+        preserve_insertion_order: false
+        temp_directory: './data/warehouse.duckdb.tmp'

@@ -1,0 +1,23 @@
+version: 2
+
+unit_tests:
+  - name: int_user_install_is_reinstall_bool_or
+    description: >
+      `is_reinstall = bool_or(previous_first_open_count > 0)` per user.
+      A user with one row carrying previous_first_open_count > 0 → true,
+      regardless of other rows where it's NULL. A user without any
+      `first_open` event (NULL throughout) → false (NULL-safe via coalesce).
+    model: int_user_install
+    given:
+      - input: ref('stg_events')
+        rows:
+          # User R: has first_open with previous_first_open_count = 5 (reinstall),
+          # plus one screen_view with NULL.
+          - {user_pseudo_id: 'R', event_name: 'first_open',  event_ts_utc: '2018-06-12 10:00:00', event_date_utc: '2018-06-12', platform: 'IOS', country: 'United States', app_id: 'com.google.flood2', traffic_medium: '(none)', previous_first_open_count: 5}
+          - {user_pseudo_id: 'R', event_name: 'screen_view', event_ts_utc: '2018-06-12 10:01:00', event_date_utc: '2018-06-12', platform: 'IOS', country: 'United States', app_id: 'com.google.flood2', traffic_medium: '(none)', previous_first_open_count: null}
+          # User N: no first_open at all (previous_first_open_count NULL throughout).
+          - {user_pseudo_id: 'N', event_name: 'screen_view', event_ts_utc: '2018-06-13 10:00:00', event_date_utc: '2018-06-13', platform: 'IOS', country: 'United States', app_id: 'com.google.flood2', traffic_medium: '(none)', previous_first_open_count: null}
+    expect:
+      rows:
+        - {user_pseudo_id: 'R', is_reinstall: true}
+        - {user_pseudo_id: 'N', is_reinstall: false}

@@ -11,11 +11,29 @@ clean-targets:
   - "target"
   - "dbt_packages"
 
+# query_comment lands in BQ INFORMATION_SCHEMA.JOBS as job-label metadata,
+# making it possible to attribute warehouse cost back to specific dbt
+# nodes / invocations / target environments. Cheap to set up front so a
+# future BQ migration doesn't have to retrofit observability.
+query-comment:
+  comment: "{{ node.unique_id if node else '' }} | invocation: {{ invocation_id }} | target: {{ target.name }}"
+  append: true
+
+# D-window upper bound (D0..D{max_day_number} inclusive) used by:
+#   - _utils/day_numbers (date spine generator)
+#   - mart_retention_* / mart_revenue_* (fct_user_daily filter)
+# Keep all references through `var('max_day_number')` so the window is
+# trivially extendable to D60/D90.
+vars:
+  max_day_number: 30
+
 models:
   highcore_ae_test:
     staging:
       +materialized: view
     intermediate:
+      +materialized: view
+    _utils:
       +materialized: view
     marts:
       +materialized: table

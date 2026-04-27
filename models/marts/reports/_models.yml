@@ -1,0 +1,326 @@
+version: 2
+
+# Test philosophy for this layer:
+# Reports are derived aggregates over `fct_user_daily` and `dim_users`.
+# We test BUSINESS invariants (retention ∈ [0,1], paying ≤ cohort, cum_arppu
+# formula consistency) — the things SQL doesn't guarantee. We DON'T test
+# `not_null` on columns that are non-NULL by construction (`coalesce(..., 0)`
+# wrappers, `count(*) GROUP BY` outputs, window aggregates over non-NULL
+# inputs). The structural plumbing is enforced upstream in `marts/core`.
+#
+# Per-mart density is intentionally lighter than `marts/core` — core is
+# the single source of truth that all four marts derive from.
+
+models:
+  - name: mart_retention_overall
+    description: |
+      ROLE: Cohort retention — overall (no slice). Headless-BI surface:
+      dashboard does `SELECT * FROM this WHERE cohort_date BETWEEN ...`.
+      USE WHEN: Cohort retention curves with no platform/country/medium slice.
+      DON'T USE FOR: Platform breakdown (use `mart_retention_by_platform`);
+      revenue (use `mart_revenue_overall`); user-level drill-down (use
+      `fct_user_daily`).
+
+      GRAIN: One row per (cohort_date, day_number).
+      PK: (cohort_date, day_number)
+      FK: cohort_date → dim_users.cohort_date (loose — every cohort_date is grouped from dim_users); day_number ∈ [0, 30].
+      DOWNSTREAM: BI dashboard only.
+
+      EDGE CASES:
+        - Densified via `_utils/day_numbers` cross join — every (cohort, day_number ∈ [0..30]) pair has a row even when no users were active. `retained_users = 0`, `retention_pct = 0` in those cells.
+        - On D0, `retained_users = cohort_size` by construction (the user is active on their own cohort_date). Asserted by `tests/assert_d0_full_retention.sql`.
+        - `not_null` is intentionally NOT tested on `cohort_size` / `retained_users` / `retention_pct` — non-NULL by construction (count outputs, coalesce-wrapped LEFT JOIN). Tested only via business invariants (`> 0`, `between 0 and 1`).
+        - `retention_pct_trailing_4w_avg` is NULL for the first cohort at each `day_number` (no preceding history), and accumulates to a stable 28-cohort window thereafter. NULL is intentional and renders as "no baseline yet" on the dashboard.
+    meta:
+      owner: analytics-eng
+      business_domain: mobile-game-analytics
+    columns:
+      - name: cohort_date
+        description: Cohort anchor — UTC date of users' first observed event (`min(event_date_utc) per user_pseudo_id`).
+        data_tests:
+          - not_null
+      - name: day_number
+        description: 'Days since `cohort_date`. Range: 0..30 inclusive (the D30 window — see `_utils/day_numbers`).'
+        data_tests:
+          - not_null
+      - name: cohort_size
+        description: Number of users in this cohort. `count(*)` over `dim_users` grouped by `cohort_date` — non-NULL by construction. Tested as `> 0`.
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: "> 0"
+      - name: retained_users
+        description: Distinct users from this cohort active on this exact `day_number` (`count(distinct user_pseudo_id)` over `fct_user_daily`). 0 (not NULL) when no user was active in this cell, via `coalesce` over the LEFT JOIN.
+      - name: retention_pct
+        description: '`retained_users / cohort_size`. Decimal in [0, 1] (NUMERIC(18,4)). 1.0 on D0 by construction.'
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: "between 0 and 1"
+      - name: retention_pct_trailing_4w_avg
+        description: |
+          Trailing 4-week (28-cohort) average of `retention_pct` over the
+          preceding cohorts at the same `day_number`. Window:
+          `avg(retention_pct) over (partition by day_number order by
+          cohort_date rows between 28 preceding and 1 preceding)`. The
+          current cohort is excluded so the column can be used as a
+          baseline to compare the current cohort against.
+          NULL for the first cohort at each `day_number` (no preceding
+          history); window grows from 1 → 28 over the next 28 cohorts and
+          stays at 28 thereafter. Decimal in [0, 1] (NUMERIC(18,4)).
+          Headless-BI surface for the "current cohort vs trailing 4w avg"
+          chart so BI does not compute the window itself.
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: "between 0 and 1"
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - cohort_date
+            - day_number
+      - dbt_utils.expression_is_true:
+          expression: "retained_users <= cohort_size"
+
+  - name: mart_retention_by_platform
+    description: |
+      ROLE: Cohort retention with `install_platform` slice — same shape as
+      `mart_retention_overall` plus an extra slice column.
+      USE WHEN: Comparing iOS vs Android cohort retention side by side without
+      a JOIN at the BI layer.
+      DON'T USE FOR: Pooled retention without slice (use `mart_retention_overall`
+      — `by_platform` does NOT aggregate to overall because cohort_size is
+      partitioned by platform); revenue (use `mart_revenue_by_platform`).
+
+      GRAIN: One row per (cohort_date, install_platform, day_number).
+      PK: (cohort_date, install_platform, day_number)
+      FK: cohort_date / install_platform sourced from `dim_users`; day_number ∈ [0, 30].
+      DOWNSTREAM: BI dashboard only.
+
+      EDGE CASES:
+        - `cohort_size` is per-platform: `mart_retention_by_platform.cohort_size` summed over platforms ≈ `mart_retention_overall.cohort_size` (a user's `install_platform` is fixed at their first event; no double-counting).
+        - Same densification + D0 invariant as `mart_retention_overall`.
+        - `not_null` intentionally NOT tested on the metric columns — non-NULL by construction.
+        - `retention_pct_trailing_4w_avg` partition includes `install_platform`, so each platform has its own baseline — iOS history does not contaminate Android baselines and vice versa. NULL semantics same as `mart_retention_overall` (first cohort per platform per day_number is NULL).
+    meta:
+      owner: analytics-eng
+      business_domain: mobile-game-analytics
+    columns:
+      - name: cohort_date
+        description: Cohort anchor — UTC date of users' first observed event.
+        data_tests: [not_null]
+      - name: install_platform
+        description: '`ANDROID` / `IOS` at install time. `accepted_values` is covered by source contract — pure pass-through.'
+        data_tests:
+          - not_null
+      - name: day_number
+        description: Days since `cohort_date`. Range 0..30 inclusive.
+        data_tests: [not_null]
+      - name: cohort_size
+        description: 'Number of users in this (cohort_date, install_platform) cell. `count(*)` grouped by both — non-NULL by construction. Tested as `> 0` directly (symmetric with `mart_retention_overall`).'
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: "> 0"
+      - name: retained_users
+        description: Distinct users from this (cohort, platform) cell active on this `day_number`. 0 (not NULL) via `coalesce` over the LEFT JOIN.
+      - name: retention_pct
+        description: '`retained_users / cohort_size`. Decimal in [0, 1] (NUMERIC(18,4)). 1.0 on D0 by construction.'
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: "between 0 and 1"
+      - name: retention_pct_trailing_4w_avg
+        description: |
+          Per-platform trailing 4-week (28-cohort) average of
+          `retention_pct`. Window:
+          `avg(retention_pct) over (partition by day_number,
+          install_platform order by cohort_date rows between 28
+          preceding and 1 preceding)`. Each `install_platform` has its
+          own baseline — iOS and Android compute independently.
+          NULL for the first cohort at each (`day_number`,
+          `install_platform`) cell (no preceding history). Decimal in
+          [0, 1] (NUMERIC(18,4)).
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: "between 0 and 1"
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - cohort_date
+            - install_platform
+            - day_number
+      - dbt_utils.expression_is_true:
+          expression: "retained_users <= cohort_size"
+
+  - name: mart_revenue_overall
+    description: |
+      ROLE: Cohort monetization — overall (no slice). F2P 4-pack
+      (gross_revenue, paying_users, cum_revenue, cum_paying_users, cum_arpu,
+      cum_arppu, paying_share). Headless-BI surface.
+      USE WHEN: Cohort revenue / ARPU / ARPPU / paying-share curves with no slice.
+      DON'T USE FOR: Platform breakdown (use `mart_revenue_by_platform`);
+      retention (use `mart_retention_overall`); user-level drill-down (use
+      `fct_user_daily`).
+
+      GRAIN: One row per (cohort_date, day_number).
+      PK: (cohort_date, day_number)
+      FK: cohort_date sourced from `dim_users`; day_number ∈ [0, 30].
+      DOWNSTREAM: BI dashboard only.
+
+      EDGE CASES:
+        - Densified via `_utils/day_numbers` cross join — every (cohort, day_number) pair has a row.
+        - `cum_*` columns are window sums OVER (PARTITION BY cohort_date ORDER BY day_number) — monotonically non-decreasing within each cohort. Asserted by `tests/assert_cum_revenue_monotonic.sql`.
+        - `cum_arppu` is NULL until the first payer appears (denominator = 0 case). Once non-NULL, the formula `cum_arppu = cum_revenue / cum_paying_users` holds within 1e-4 (asserted).
+        - `cum_paying_users` is the sum of daily distinct payers across days, NOT the count of distinct users over the window. A user paying on D2 and D5 contributes to BOTH days' `paying_users` and therefore +2 to `cum_paying_users`. Treat it as "cumulative paying-user-days", not "cumulative unique payers".
+        - Sample is tiny: 27 in_app_purchase events / 24 distinct payers / $24.89 total. NULL `cum_arppu` is common at low day_numbers.
+        - `not_null` intentionally NOT tested on metric columns — non-NULL by construction (window sums of coalesce'd inputs); `cum_arppu` is intentionally nullable.
+        - `cum_arpu_trailing_4w_avg` and `paying_share_trailing_4w_avg` are NULL for the first cohort at each `day_number` (no preceding history), and accumulate to a stable 28-cohort window thereafter. NULL is intentional and renders as "no baseline yet" on the dashboard.
+    meta:
+      owner: analytics-eng
+      business_domain: mobile-game-analytics
+    columns:
+      - name: cohort_date
+        description: Cohort anchor — UTC date of users' first observed event.
+        data_tests: [not_null]
+      - name: day_number
+        description: Days since `cohort_date`. Range 0..30 inclusive.
+        data_tests: [not_null]
+      - name: cohort_size
+        description: 'Number of users in this cohort — `count(*) GROUP BY cohort_date` over `dim_users`. Denominator for `cum_arpu` and `paying_share`; same value as `mart_retention_overall.cohort_size` for the same `cohort_date`. Non-NULL by construction; constant within a (cohort_date) cell across all `day_number` rows.'
+      - name: gross_revenue
+        description: 'Revenue in USD earned by the cohort on this exact `day_number`. `sum(gross_revenue)` over `fct_user_daily`, coalesced to 0 on empty cells. NUMERIC(18,4); >= 0.'
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: paying_users
+        description: Distinct payers from this cohort seen on this exact `day_number`. `count(distinct case when paying_flag then user_pseudo_id end)`, coalesced to 0. >= 0.
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: cum_revenue
+        description: 'Cumulative gross_revenue from D0 through `day_number`, USD. Window sum over `cohort_date`. NUMERIC(18,4); monotonically non-decreasing within each cohort.'
+      - name: cum_paying_users
+        description: |
+          Cumulative paying-user-days from D0 through `day_number` — `sum(paying_users) OVER (...)`.
+          NOT distinct unique payers. A user paying on D2 and D5 contributes +1 on each day,
+          hence +2 to this cumulative metric. Use this for ARPPU formulas; do NOT read it as "unique payers acquired".
+      - name: cum_arpu
+        description: '`cum_revenue / cohort_size` — average revenue per user (cohort-wide, including non-payers). NUMERIC(18,4).'
+      - name: cum_arppu
+        description: '`cum_revenue / cum_paying_users` — average revenue per paying user-day. NULL until the first payer appears in the cohort. Formula consistency tested to within 1e-4. NUMERIC(18,4).'
+      - name: paying_share
+        description: '`cum_paying_users / cohort_size`. Cumulative paying-user-days normalized by cohort size — a paying-share curve, not a unique-payer share. NUMERIC(18,4).'
+      - name: cum_arpu_trailing_4w_avg
+        description: |
+          Trailing 4-week (28-cohort) average of `cum_arpu` over the
+          preceding cohorts at the same `day_number`. Window:
+          `avg(cum_arpu) over (partition by day_number order by
+          cohort_date rows between 28 preceding and 1 preceding)`. The
+          current cohort is excluded so the column serves as a baseline
+          to compare the current cohort's monetization against.
+          NULL for the first cohort at each `day_number` (no preceding
+          history); window grows from 1 → 28 over the next 28 cohorts and
+          stays at 28 thereafter. NUMERIC(18,4).
+          Headless-BI surface for the "cum ARPU curves — current vs
+          baseline" chart so BI does not compute the window itself.
+      - name: paying_share_trailing_4w_avg
+        description: |
+          Trailing 4-week (28-cohort) average of `paying_share` over the
+          preceding cohorts at the same `day_number`. Window:
+          `avg(paying_share) over (partition by day_number order by
+          cohort_date rows between 28 preceding and 1 preceding)`. Same
+          NULL-on-first-cohort / accumulating-window semantics as
+          `cum_arpu_trailing_4w_avg`. Decimal in [0, 1] (NUMERIC(18,4)).
+          Headless-BI surface for the "PAY% delta vs trailing 28-day
+          baseline" KPI so BI does not compute the window itself.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - cohort_date
+            - day_number
+      - dbt_utils.expression_is_true:
+          expression: "paying_users <= cohort_size"
+      - dbt_utils.expression_is_true:
+          expression: "cum_arppu is null or abs(cum_arppu - cum_revenue / nullif(cum_paying_users, 0)) < 0.0001"
+          name: mart_revenue_overall_cum_arppu_formula_consistent
+
+  - name: mart_revenue_by_platform
+    description: |
+      ROLE: Cohort monetization with `install_platform` slice — same shape as
+      `mart_revenue_overall` plus an extra slice column. Window functions are
+      partitioned by `(cohort_date, install_platform)`.
+      USE WHEN: Comparing iOS vs Android cohort monetization side by side
+      without a JOIN at the BI layer.
+      DON'T USE FOR: Pooled revenue without slice (use `mart_revenue_overall`
+      — `by_platform` does NOT aggregate to overall because cohort_size is
+      partitioned by platform); retention (use `mart_retention_by_platform`).
+
+      GRAIN: One row per (cohort_date, install_platform, day_number).
+      PK: (cohort_date, install_platform, day_number)
+      FK: cohort_date / install_platform sourced from `dim_users`; day_number ∈ [0, 30].
+      DOWNSTREAM: BI dashboard only.
+
+      EDGE CASES:
+        - All `mart_revenue_overall` edge cases apply per-platform.
+        - With ~$25 of revenue across 24 payers TOTAL, per-platform numbers are EXTREMELY sparse — many cells have `paying_users = 0` and `cum_arppu = NULL`. Kept in scope to demonstrate the by-slice pattern (which trivially extends to by_country / by_traffic via the same template).
+        - Window partition is `(cohort_date, install_platform)` — `cum_*` monotonicity holds within each (cohort, platform) cell, not across platforms.
+        - `cum_arpu_trailing_4w_avg` and `paying_share_trailing_4w_avg` partitions include `install_platform`, so each platform has its own baseline — iOS history does not contaminate Android baselines and vice versa. NULL semantics same as `mart_revenue_overall` (first cohort per platform per day_number is NULL).
+    meta:
+      owner: analytics-eng
+      business_domain: mobile-game-analytics
+    columns:
+      - name: cohort_date
+        description: Cohort anchor — UTC date of users' first observed event.
+        data_tests: [not_null]
+      - name: install_platform
+        description: '`ANDROID` / `IOS` at install time. Pass-through from `dim_users`.'
+        data_tests:
+          - not_null
+      - name: day_number
+        description: Days since `cohort_date`. Range 0..30 inclusive.
+        data_tests: [not_null]
+      - name: cohort_size
+        description: 'Number of users in this (cohort_date, install_platform) cell.'
+      - name: gross_revenue
+        description: Revenue in USD earned by this (cohort, platform) cell on this exact `day_number`. NUMERIC(18,4); >= 0.
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: paying_users
+        description: Distinct payers from this (cohort, platform) cell seen on this exact `day_number`. >= 0.
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: cum_revenue
+        description: 'Cumulative gross_revenue from D0 through `day_number`, partitioned by `(cohort_date, install_platform)`. NUMERIC(18,4); monotonically non-decreasing within each (cohort, platform) cell.'
+      - name: cum_paying_users
+        description: 'Cumulative paying-user-days within (cohort, platform). Same semantics as `mart_revenue_overall.cum_paying_users` — NOT distinct unique payers.'
+      - name: cum_arpu
+        description: '`cum_revenue / cohort_size` per (cohort, platform). NUMERIC(18,4).'
+      - name: cum_arppu
+        description: '`cum_revenue / cum_paying_users` per (cohort, platform). NULL until the first payer appears in the cell. Sparse in this sample. NUMERIC(18,4).'
+      - name: paying_share
+        description: '`cum_paying_users / cohort_size` per (cohort, platform). NUMERIC(18,4).'
+      - name: cum_arpu_trailing_4w_avg
+        description: |
+          Per-platform trailing 4-week (28-cohort) average of `cum_arpu`.
+          Window: `avg(cum_arpu) over (partition by day_number,
+          install_platform order by cohort_date rows between 28
+          preceding and 1 preceding)`. Each `install_platform` has its
+          own baseline — iOS and Android compute independently.
+          NULL for the first cohort at each (`day_number`,
+          `install_platform`) cell. NUMERIC(18,4).
+      - name: paying_share_trailing_4w_avg
+        description: |
+          Per-platform trailing 4-week (28-cohort) average of
+          `paying_share`. Window:
+          `avg(paying_share) over (partition by day_number,
+          install_platform order by cohort_date rows between 28
+          preceding and 1 preceding)`. Each `install_platform` has its
+          own baseline. NULL-on-first-cohort / accumulating-window
+          semantics same as `cum_arpu_trailing_4w_avg`. Decimal in
+          [0, 1] (NUMERIC(18,4)).
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - cohort_date
+            - install_platform
+            - day_number
+      - dbt_utils.expression_is_true:
+          expression: "paying_users <= cohort_size"

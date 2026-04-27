@@ -4,6 +4,7 @@ sources:
   - name: raw
     schema: raw
     loader: prepare_data_py
+    freshness: null  # disabled — static 2018 sample; see EDGE CASES for prod target
     description: |
       ROLE: Raw Firebase Analytics events from the public BigQuery sample
       `firebase-public-project.analytics_153293282` (mobile F2P game "Flood-It!").
@@ -17,7 +18,7 @@ sources:
       `event_timestamp` that staging resolves.
 
       EDGE CASES:
-        - Static 2018 sample — never refreshed, freshness intentionally not declared (production target: `freshness: warn_after: 1 day` via `loaded_at_field: _LOAD_TIMESTAMP` on BigQuery).
+        - Static 2018 sample — never refreshed, freshness explicitly disabled (`freshness: null` at source level); production target: `freshness: warn_after: 1 day` via `loaded_at_field: _LOAD_TIMESTAMP` on BigQuery.
         - Hard-cap 50,000 events/day — public-sample artefact (114 days × 50k = 5.7M rows). Cohort sizes and absolute counts are non-representative; read relatively.
         - 207 bit-identical duplicates on (user_pseudo_id, event_timestamp, event_name) by design (~0.004% of rows). Dedup happens in `stg_events`; never put `unique_combination_of_columns` here.
         - `event_date` is local-TZ but `event_timestamp` is UTC; they disagree on 34% of rows. Project standardizes on UTC via `event_date_utc = event_timestamp::date`.

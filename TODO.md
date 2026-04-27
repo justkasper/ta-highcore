@@ -36,7 +36,7 @@
 
 - [ ] **Skipped** per user — стратегия слияния веток вне scope этого захода.
 
-`README.md` §2.1, §3, §8 ссылается на `docs/data_exploration.md`, `docs/eda_report.md`, `docs/eda_tests.md`, `docs/assumptions.md`. Эти файлы лежат на `feature/part-1-*` и `feature/part-2-*`, на текущей `feature/part-4-dashboard-sketch` их нет.
+`README.md` §2.1, §3, §8 ссылается на `docs/data_exploration.md`, `models/staging/_raw_events__eda.md` (исходно `docs/eda_report.md`, теперь doc-блок к `raw.events`), `docs/eda_tests.md`, `docs/assumptions.md`. Эти файлы лежат на `feature/part-1-*` и `feature/part-2-*`, на текущей `feature/part-4-dashboard-sketch` их нет.
 
 В шапке README есть warning-блок об этом, но всё равно остаётся вопрос стратегии слияния веток перед сдачей: (a) merge всех `feature/part-N-*` в `main` (ссылки рабочие), (b) cherry-pick только финальных артефактов в одну ветку, (c) оставить как есть и предупредить ревьюера. Рекомендую (a). Без слияния половина ссылок в README 404, для ревьюера это первое, что бросится в глаза.
 

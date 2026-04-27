@@ -5,10 +5,9 @@
 Методологические опоры:
 - [`docs/decisions/architecture.md`](architecture.md) — слои и материализации; стратегия опирается на эту структуру.
 - `models/staging/_raw_events__eda.md` — статические факты о публичном сэмпле, которые **не превращаются в тесты**, а живут как документация источника.
-- - `.claude/skills/using-dbt-for-analytics-engineering/references/writing-data-tests.md` — Tier-фреймворк, layer-specific guidance.
-- `.claude/skills/adding-dbt-unit-test/SKILL.md` — когда писать unit-тесты, формат `dict`.
-- `.claude/skills/data-quality-auditor/SKILL.md` — DQS-фрейминг (5 dimensions).
-- `git show feature/part-1-data-exploration:docs/eda_tests.md` — каталог инвариантов, выписанный в EDA.
+- [dbt skill — методология data discovery](https://github.com/dbt-labs/dbt-agent-skills/blob/main/skills/dbt/skills/using-dbt-for-analytics-engineering/references/discovering-data.md).
+- [DQ skill — DQS-фрейминг (5 dimensions)](https://github.com/alirezarezvani/claude-skills/tree/main/engineering/data-quality-auditor).
+- [Product skill — методология product analytics](https://github.com/alirezarezvani/claude-skills/tree/main/product-team/product-analytics).
 
 ---
 

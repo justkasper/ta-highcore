@@ -22,6 +22,7 @@ query-comment:
 # D-window upper bound (D0..D{max_day_number} inclusive) used by:
 #   - _utils/day_numbers (date spine generator)
 #   - mart_retention_* / mart_revenue_* (fct_user_daily filter)
+#   - tests/assert_*_reconciliation (fct ↔ stg_events sweep) 
 # Keep all references through `var('max_day_number')` so the window is
 # trivially extendable to D60/D90.
 vars:

@@ -36,6 +36,19 @@ import duckdb
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = REPO_ROOT / "data" / "warehouse.duckdb"
 
+# Schema this script is expected to write. If models/staging/stg_events.sql
+# adds, removes, or renames a column, update INSERT_TEMPLATE AND this tuple
+# in lock-step — the bootstrap will refuse to proceed if they drift apart.
+EXPECTED_COLUMNS = (
+    "event_date", "event_timestamp", "event_ts_utc", "event_date_utc",
+    "event_name", "user_pseudo_id", "platform",
+    "event_value_in_usd", "event_previous_timestamp",
+    "event_bundle_sequence_id", "event_server_timestamp_offset",
+    "engagement_time_msec", "screen_class", "previous_first_open_count",
+    "ga_session_id", "device_category", "device_os", "country",
+    "app_id", "traffic_medium", "traffic_source_name",
+)
+
 # Mirrors the typed projection from models/staging/stg_events.sql.
 # Kept in sync manually — when the model SQL changes, update this template.
 INSERT_TEMPLATE = """
@@ -142,6 +155,19 @@ def main() -> int:
         f"CREATE TABLE main.stg_events AS {INSERT_TEMPLATE}",
         [bootstrap_date],
     )
+
+    actual_columns = tuple(
+        row[0] for row in con.execute("DESCRIBE main.stg_events").fetchall()
+    )
+    if actual_columns != EXPECTED_COLUMNS:
+        sys.stderr.write(
+            "stg_events schema drift detected after bootstrap.\n"
+            f"  expected: {EXPECTED_COLUMNS}\n"
+            f"  got:      {actual_columns}\n"
+            "Update INSERT_TEMPLATE and EXPECTED_COLUMNS in this file to\n"
+            "match models/staging/stg_events.sql, then re-run.\n"
+        )
+        return 1
 
     for i, d in enumerate(rest, start=2):
         print(f"[{i}/{len(dates)}] insert {d} ...")

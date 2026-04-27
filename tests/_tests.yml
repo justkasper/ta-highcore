@@ -4,9 +4,10 @@ data_tests:
   - name: assert_paying_users_reconciliation
     description: |
       End-to-end paying-users reconciliation: distinct payers attributed in
-      `mart_revenue_overall` (any cohort, any `day_number` 0..30) must equal
+      `mart_revenue_overall` (any cohort, any `day_number` within the
+      configured D-window — see `var('max_day_number')`) must equal
       distinct users with at least one `in_app_purchase` event in
-      `stg_events` that fell inside their D0..D30 cohort window.
+      `stg_events` that fell inside their D-window cohort range.
 
       Catches drift between the source revenue stream and the
       cohort-attributed count in the dashboard. Complements
@@ -15,10 +16,11 @@ data_tests:
   - name: assert_revenue_reconciliation
     description: |
       End-to-end revenue reconciliation: total `cum_revenue` at the LAST
-      seen `day_number` per cohort, summed across cohorts (= D30 cumulative
-      revenue per cohort), must equal the sum of `in_app_purchase`
+      seen `day_number` per cohort, summed across cohorts (= cumulative
+      revenue at the configured D-window upper bound per cohort), must
+      equal the sum of `in_app_purchase`
       `event_value_in_usd` from `stg_events` restricted to events that fall
-      inside that user's D0..D30 cohort window.
+      inside that user's D-window cohort range.
 
       Casts are aligned to `numeric(18, 4)` on both sides so float drift
       cannot introduce false positives.
@@ -26,7 +28,7 @@ data_tests:
   - name: assert_n_purchases_reconciliation
     description: |
       End-to-end `n_purchases` reconciliation: `sum(n_purchases)` in
-      `fct_user_daily` within each user's D0..D30 window must equal the
+      `fct_user_daily` within each user's D-window must equal the
       count of `in_app_purchase` events in `stg_events` that fell inside
       the same cohort window.
 
